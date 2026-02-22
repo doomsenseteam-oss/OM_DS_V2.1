@@ -1,0 +1,2733 @@
+-- ═══════════════════════════════════════════════════════════════════════════
+-- DOOMSENSE V2.1 — By R3cup/doomsenseteam
+-- ═══════════════════════════════════════════════════════════════════════════
+
+-- ── SERVICES ─────────────────────────────────────────────────────────────
+local Players            = game:GetService("Players")
+local RunService         = game:GetService("RunService")
+local UserInputService   = game:GetService("UserInputService")
+local TweenService       = game:GetService("TweenService")
+local Workspace          = game:GetService("Workspace")
+local CoreGui            = game:GetService("CoreGui")
+local Lighting           = game:GetService("Lighting")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local StatsService       = game:GetService("Stats")
+local SoundService       = game:GetService("SoundService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local Debris             = game:GetService("Debris")
+local TeleportService    = game:GetService("TeleportService")
+
+local LocalPlayer = Players.LocalPlayer
+local Camera      = Workspace.CurrentCamera
+
+-- ── LIBRARIES ────────────────────────────────────────────────────────────
+local Fluent           = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager      = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- ── GLOBAL CONFIG ─────────────────────────────────
+local GlobalConfig = {
+    -- Movement
+    IsFlying   = false,
+    IsSpeeding = false,
+    FlySpeed   = 60,
+    WalkSpeed  = 45,
+
+    -- Automation
+    AutoRing  = false,
+    NoCDJump  = false,
+
+    -- Visuals (populated later by ValidateConfig)
+    Visuals = {},
+
+    -- Auto Hunt
+    AH = {
+        Enabled      = false,
+        Mode         = "Nearest",
+        ManualTarget = false,
+        TargetChar   = "None",
+        Color        = Color3.fromRGB(255, 0, 0),
+        PingLimit    = 130,
+        Delay        = 1.7,
+        Height       = 0,
+        Distance     = 0,
+    },
+
+    -- Auto Vote
+    Vote = {
+        Enabled    = false,
+        SurvTarget = "Silver",
+        ExeTarget  = "2011x",
+        Randomize  = false,
+        Delay      = 1,
+    },
+
+    -- LMS
+    LMS = {
+        Enabled      = false,
+        Volume       = 1.2,
+        Track        = "None",
+        StartEffect  = "None",
+        EffectVolume = 1,
+    },
+
+    -- Animation
+    Anim = {
+        AutoDetect  = false,
+        CurrentChar = "R6",
+        CurrentName = "Dance 1",
+        MuteSound   = false,
+        Volume      = 2,
+    },
+
+    -- Mobile
+    ShowMobileBtn = true,
+}
+
+-- ── GLOBAL STATE ───────────────────────────
+local GlobalState = {
+    ScriptActive   = true,
+    SelectedPlayer = nil,
+    TeleportBind   = Enum.KeyCode.V,
+    UpdateMobileBtn = nil,
+    CurrentPing    = 0,
+
+    -- Silver Time Control
+    Silver = {
+        IsRecording = false,
+        IsRewinding = false,
+        Points      = {},
+        LastPos     = nil,
+        MaxPoints   = 20,
+        MinDist     = 10,
+    },
+
+    -- Auto Hunt runtime
+    AH = {
+        Target     = nil,
+        LastAttack = 0,
+        DownedDB   = {},
+        Keys       = {"W", "A", "S", "D"},
+        Visual     = nil,
+    },
+
+    -- Auto Vote state machine
+    Vote = {
+        VotedInRound = false,
+        Phase        = "idle",
+        Timer        = 0,
+    },
+
+    -- ART runtime
+    ART = {
+        HandledThisRound = false,
+        LastSearch        = 0,
+    },
+
+    -- LMS runtime
+    LMS = {
+        IsCapturing       = false,
+        StopRoutineRunning = false,
+        CurrentAssetID    = nil,
+        VisualPlayed      = false,
+        CachedFolder      = nil,
+        Survivor          = nil,
+        Killer            = nil,
+    },
+
+    -- Visuals runtime
+    Vis = {
+        PadCache       = {},
+        HighlightCache = {},
+        TagCache       = {},
+        HasScannedPads = false,
+    },
+
+    -- Animation runtime
+    Anim = {
+        Track = nil,
+        Sound = nil,
+    },
+}
+
+local Options = Fluent.Options
+
+-- ── UNIFIED EXE DETECTION ────────────────────────────────────────────────
+local GAME_EXE_NAMES = {
+    "tailsdoll", "kolossos", "2011x", "fleetway", "furnace",
+    "lord x", "exe", "tripwire", "rewrite", "eyx", "2017x",
+    "executor", "legacyfurnace", "sonico", "steve", "bear5",
+    "chara", "v1"
+}
+
+local function IsGameEXE(model)
+    if not model then return false end
+    local charAttr = model:GetAttribute("Character")
+    local targetName = string.lower(tostring(charAttr or model.Name))
+    for _, k in ipairs(GAME_EXE_NAMES) do
+        if string.find(targetName, k) then return true end
+    end
+    return false
+end
+
+local VoteLists = {
+    EXE = {
+        "TailsDoll", "Kolossos", "2011x", "Fleetway", "Furnace",
+        "Lord X", "bear5", "Tripwire", "chara", "v1",
+        "2017x", "sonico", "steve", "LegacyFurnace"
+    },
+    Survivor = {
+        "Tails", "Sonic", "Silver", "Blaze", "Cream",
+        "MetalSonic", "Eggman", "Knuckles", "Amy"
+    }
+}
+
+-- ── UTILITY FUNCTIONS ────────────────────────────────────────────────────
+
+local function GetGameState()
+    if Workspace:FindFirstChild("GameProperties") and Workspace.GameProperties:FindFirstChild("State") then
+        return Workspace.GameProperties.State.Value
+    end
+    return "UNKNOWN"
+end
+
+local BodyVel, BodyGyro
+local function CleanPhysics()
+    if BodyVel then BodyVel:Destroy(); BodyVel = nil end
+    if BodyGyro then BodyGyro:Destroy(); BodyGyro = nil end
+
+    local char = LocalPlayer.Character
+    if char then
+        local hum  = char:FindFirstChild("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if root and (GlobalConfig.IsFlying or GlobalConfig.IsSpeeding) then
+            root.Velocity = Vector3.zero
+        end
+        if hum then hum.PlatformStand = false end
+        char:SetAttribute("State", "default")
+    end
+end
+
+local function SetFeatureState(toggleId, state)
+    if Options[toggleId] then Options[toggleId]:SetValue(state) end
+end
+
+-- Priority list for Auto Hunt target sorting
+local PriorityList = {
+    ["Cream"] = 9, ["Tails"] = 8, ["Eggman"] = 7, ["Metal Sonic"] = 6,
+    ["Amy"] = 5, ["Blaze"] = 4, ["Knuckles"] = 3, ["Silver"] = 2, ["Sonic"] = 1
+}
+
+-- ── FILE SYSTEM (Doomsense/cfg & Doomsense/CustomLms) ───────────────────
+
+local LMS_DIR = "Doomsense/CustomLms"
+
+task.spawn(function()
+    if not isfolder("Doomsense") then makefolder("Doomsense") end
+    if not isfolder("Doomsense/cfg") then makefolder("Doomsense/cfg") end
+    if not isfolder(LMS_DIR) then makefolder(LMS_DIR) end
+end)
+
+-- ── UI: WINDOW & TABS ───────────────────────────────────────────────────
+
+local Window = Fluent:CreateWindow({
+    Title       = "DOOMSENSE V2.1",
+    SubTitle    = "Fluent"  .. Fluent.Version,
+    TabWidth    = 160,
+    Size        = UDim2.fromOffset(580, 460),
+    Acrylic     = false,
+    Theme       = "Dark",
+    MinimizeKey = Enum.KeyCode.Insert
+})
+
+local Tabs = {
+    Main       = Window:AddTab({ Title = "Main",       Icon = "home" }),
+    Teleport   = Window:AddTab({ Title = "Teleport",   Icon = "map" }),
+    Combat     = Window:AddTab({ Title = "Auto Hunt",  Icon = "sword" }),
+    AutoVote   = Window:AddTab({ Title = "Auto Vote",  Icon = "check-square" }),
+    Animations = Window:AddTab({ Title = "Animations", Icon = "clapperboard" }),
+    Visuals    = Window:AddTab({ Title = "Visuals",    Icon = "eye" }),
+    LMS        = Window:AddTab({ Title = "Custom LMS", Icon = "music" }),
+    Mobile     = Window:AddTab({ Title = "Mobile",     Icon = "smartphone" }),
+    Settings   = Window:AddTab({ Title = "Settings",   Icon = "settings" }),
+}
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: MAIN TAB (Movement & Automation)
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabMain = Tabs.Main
+
+-- Flight
+TabMain:AddSection("Flight Control")
+
+TabMain:AddToggle("FlyTog", {
+    Title       = "Enable Flight",
+    Description = "Fly freely through the map",
+    Default     = false,
+    Callback    = function(v)
+        GlobalConfig.IsFlying = v
+        if v then
+            local char = LocalPlayer.Character
+            if char and char:FindFirstChild("HumanoidRootPart") then
+                local root = char.HumanoidRootPart
+                CleanPhysics()
+                BodyVel = Instance.new("BodyVelocity", root)
+                BodyVel.Name = "DoomVel"
+                BodyVel.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                BodyGyro = Instance.new("BodyGyro", root)
+                BodyGyro.Name = "DoomGyro"
+                BodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
+                BodyGyro.P = 10000
+                char.Humanoid.PlatformStand = true
+            end
+        else
+            CleanPhysics()
+        end
+        if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("Fly", v) end
+    end
+})
+
+TabMain:AddKeybind("FlyBind", {
+    Title = "Flight Keybind", Default = "G", Mode = "Toggle",
+    Callback = function() SetFeatureState("FlyTog", not Options.FlyTog.Value) end
+})
+
+TabMain:AddSlider("FlySpeed", {
+    Title = "Flight Speed", Default = 60, Min = 20, Max = 300, Rounding = 1,
+    Callback = function(v) GlobalConfig.FlySpeed = v end
+})
+
+-- Speed
+TabMain:AddSection("Speed Control")
+
+TabMain:AddToggle("SpeedTog", {
+    Title       = "Enable Speed",
+    Description = "Modify walking velocity",
+    Default     = false,
+    Callback    = function(v)
+        GlobalConfig.IsSpeeding = v
+        if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("Speed", v) end
+    end
+})
+
+TabMain:AddKeybind("SpeedBind", {
+    Title = "Speed Keybind", Default = "C", Mode = "Toggle",
+    Callback = function() SetFeatureState("SpeedTog", not Options.SpeedTog.Value) end
+})
+
+TabMain:AddSlider("WalkSpeed", {
+    Title = "Walk Speed", Default = 45, Min = 16, Max = 200, Rounding = 1,
+    Callback = function(v) GlobalConfig.WalkSpeed = v end
+})
+
+-- Automation
+TabMain:AddSection("Automation")
+
+TabMain:AddToggle("ARTTog", {
+    Title       = "Auto Ring Teleport (ART)",
+    Description = "Teleport to Ring/Exit at 80s",
+    Default     = false,
+    Callback    = function(v)
+        GlobalConfig.AutoRing = v
+        if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("ART", v) end
+    end
+})
+
+TabMain:AddKeybind("ARTBind", {
+    Title = "ART Keybind", Default = "T", Mode = "Toggle",
+    Callback = function() SetFeatureState("ARTTog", not Options.ARTTog.Value) end
+})
+
+TabMain:AddToggle("NoCDJump", {
+    Title       = "No Jump Cooldown",
+    Description = "Spam jump without limits",
+    Default     = false,
+    Callback    = function(v) GlobalConfig.NoCDJump = v end
+})
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: TELEPORT TAB (Standard TP & Silver Time Control)
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabTeleport = Tabs.Teleport
+
+local function GetPlayerList()
+    local list = {}
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer then table.insert(list, v.Name) end
+    end
+    return list
+end
+
+local function TeleportToLobby()
+    local lobby    = Workspace:FindFirstChild("Lobby") or Workspace:FindFirstChild("Map") or Workspace:FindFirstChild("Maps")
+    local spawnLoc = nil
+    if lobby then
+        spawnLoc = lobby:FindFirstChild("SpawnLocation", true)
+        if not spawnLoc then
+            for _, v in pairs(lobby:GetDescendants()) do
+                if v:IsA("SpawnLocation") then spawnLoc = v; break end
+            end
+        end
+    end
+    if spawnLoc and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        LocalPlayer.Character.HumanoidRootPart.CFrame = spawnLoc.CFrame + Vector3.new(0, 5, 0)
+        Fluent:Notify({ Title = "Lobby", Content = "Teleported to Spawn", Duration = 2 })
+    else
+        Fluent:Notify({ Title = "Error", Content = "Lobby Spawn not found!", Duration = 2 })
+    end
+end
+
+local function SmartTeleport()
+    if GlobalState.SelectedPlayer then
+        local target = Players:FindFirstChild(GlobalState.SelectedPlayer)
+        if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                local cf = target.Character.HumanoidRootPart.CFrame * CFrame.new(0, 2, 3)
+                LocalPlayer.Character.HumanoidRootPart.CFrame = cf
+                Fluent:Notify({ Title = "Teleport", Content = "To: " .. target.Name, Duration = 1 })
+                return
+            end
+        else
+            Fluent:Notify({ Title = "Error", Content = "Target not found/spawned", Duration = 2 })
+            return
+        end
+    end
+    TeleportToLobby()
+end
+
+-- Silver Time Control (2D Billboard Scale Logic)
+local function CreateSilverPoint(cframe, isStart)
+    local part = Instance.new("Part")
+    part.Name        = isStart and "SilverStart" or "SilverTrail"
+    part.Anchored    = true
+    part.CanCollide  = false
+    part.CanQuery    = false
+    part.CastShadow  = false
+    part.Transparency = 1
+    part.Size         = Vector3.new(0.1, 0.1, 0.1)
+    part.CFrame       = cframe - Vector3.new(0, 2.8, 0)
+    part.Parent       = Workspace
+
+    local bb = Instance.new("BillboardGui")
+    bb.Adornee        = part
+    bb.Parent          = part
+    bb.AlwaysOnTop     = true
+    bb.LightInfluence  = 0
+    bb.Size = isStart and UDim2.new(6, 0, 6, 0) or UDim2.new(3, 0, 3, 0)
+
+    local img = Instance.new("ImageLabel")
+    img.Parent              = bb
+    img.BackgroundTransparency = 1
+    img.Size                = UDim2.fromScale(1, 1)
+    img.Image               = isStart and "rbxassetid://99162408431074" or "rbxassetid://137317577738708"
+    img.ImageColor3         = isStart and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(0, 255, 255)
+
+    TweenService:Create(img, TweenInfo.new(3, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), { Rotation = 360 }):Play()
+    return part
+end
+
+local function ClearSilver()
+    for _, p in pairs(GlobalState.Silver.Points) do
+        if p and p.Parent then p:Destroy() end
+    end
+    GlobalState.Silver.Points = {}
+    GlobalState.Silver.LastPos = nil
+end
+
+local function RewindSilver()
+    local S = GlobalState.Silver
+    if S.IsRewinding or #S.Points == 0 then return end
+    S.IsRewinding = true
+    S.IsRecording = false
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        root.Anchored = true
+        for i = #S.Points, 1, -1 do
+            local pointPart = S.Points[i]
+            if pointPart and pointPart.Parent then
+                root.CFrame = CFrame.new(pointPart.Position + Vector3.new(0, 3, 0), pointPart.Position + Vector3.new(0, 3, 0) + root.CFrame.LookVector)
+                local bb = pointPart:FindFirstChildOfClass("BillboardGui")
+                if bb then
+                    local im = bb:FindFirstChildOfClass("ImageLabel")
+                    if im then
+                        TweenService:Create(im, TweenInfo.new(0.1), { ImageTransparency = 1, Size = UDim2.fromScale(0, 0) }):Play()
+                    end
+                end
+                Debris:AddItem(pointPart, 0.2)
+            end
+            task.wait(0.05)
+        end
+        root.Anchored = false
+    end
+
+    ClearSilver()
+    S.IsRewinding = false
+    if Options.SilverTog then Options.SilverTog:SetValue(false) end
+end
+
+-- Teleport UI
+TabTeleport:AddSection("Standard Teleport")
+
+local PlayerDropdown = TabTeleport:AddDropdown("TP_TargetSelect", {
+    Title    = "Select Player",
+    Values   = GetPlayerList(),
+    Multi    = false,
+    Default  = nil,
+    Callback = function(v) GlobalState.SelectedPlayer = v end
+})
+
+TabTeleport:AddButton({
+    Title    = "Refresh List",
+    Callback = function()
+        PlayerDropdown:SetValues(GetPlayerList())
+        PlayerDropdown:SetValue(nil)
+        GlobalState.SelectedPlayer = nil
+    end
+})
+
+TabTeleport:AddButton({
+    Title       = "Teleport",
+    Description = "Teleports to selected target or Lobby",
+    Callback    = SmartTeleport
+})
+
+TabTeleport:AddKeybind("TP_Bind_Change", {
+    Title    = "Teleport Keybind",
+    Default  = "V",
+    Mode     = "Toggle",
+    Callback = function() SmartTeleport() end,
+    ChangedCallback = function(New) GlobalState.TeleportBind = New end
+})
+
+TabTeleport:AddButton({ Title = "Force Lobby Spawn", Callback = TeleportToLobby })
+
+TabTeleport:AddSection("Silver Ability Settings")
+
+TabTeleport:AddToggle("SilverTog", {
+    Title       = "Time Control (Toggle)",
+    Description = "ON: Record | OFF: Rewind",
+    Default     = false,
+    Callback    = function(v)
+        local S = GlobalState.Silver
+        if v then
+            if S.IsRewinding then return end
+            ClearSilver()
+            S.IsRecording = true
+            S.LastPos = nil
+            Fluent:Notify({ Title = "Silver", Content = "Recording...", Duration = 2 })
+        else
+            if S.IsRecording then RewindSilver() end
+        end
+        if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("Silver", v) end
+    end
+})
+
+TabTeleport:AddKeybind("SilverBind", {
+    Title = "Time Control Bind", Default = "L", Mode = "Toggle",
+    Callback = function()
+        if Options.SilverTog then Options.SilverTog:SetValue(not Options.SilverTog.Value) end
+    end
+})
+
+TabTeleport:AddSlider("Sil_Max", {
+    Title = "Max Portals Limit", Default = 20, Min = 5, Max = 100, Rounding = 0,
+    Callback = function(v) GlobalState.Silver.MaxPoints = v end
+})
+
+TabTeleport:AddSlider("Sil_Dist", {
+    Title = "Distance Between Portals", Default = 10, Min = 10, Max = 50, Rounding = 0,
+    Callback = function(v) GlobalState.Silver.MinDist = v end
+})
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: AUTO VOTE TAB
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabVote = Tabs.AutoVote
+
+TabVote:AddToggle("Vote_Enable", {
+    Title   = "Enable Auto Vote",
+    Default = false,
+    Callback = function(v) GlobalConfig.Vote.Enabled = v end
+})
+
+TabVote:AddParagraph({ Title = "Survivor", Content = "Select target if you spawn as Survivor" })
+TabVote:AddDropdown("Vote_Surv", {
+    Title    = "Survivor Character",
+    Values   = VoteLists.Survivor,
+    Default  = "Silver",
+    Callback = function(v) GlobalConfig.Vote.SurvTarget = v end
+})
+
+TabVote:AddParagraph({ Title = "EXE", Content = "Select target if you spawn as EXE" })
+TabVote:AddDropdown("Vote_Exe", {
+    Title    = "EXE Character",
+    Values   = VoteLists.EXE,
+    Default  = "2011x",
+    Callback = function(v) GlobalConfig.Vote.ExeTarget = v end
+})
+
+TabVote:AddToggle("Vote_Random", {
+    Title       = "Randomize Selection",
+    Description = "Ignores choices above, picks random",
+    Default     = false,
+    Callback    = function(v) GlobalConfig.Vote.Randomize = v end
+})
+
+TabVote:AddSlider("Vote_Delay", {
+    Title    = "Vote Delay",
+    Default  = 1, Min = 0, Max = 10, Rounding = 1,
+    Callback = function(v) GlobalConfig.Vote.Delay = v end
+})
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: AUTO HUNT TAB (Combat with prediction & -30..30 sliders)
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabCombat = Tabs.Combat
+
+-- Downed asset scanner
+local function ScanDownedAssets()
+    table.clear(GlobalState.AH.DownedDB)
+    local rs = ReplicatedStorage
+    local ca = rs:FindFirstChild("ClientAssets")
+    if not ca then return end
+    local chars = ca:FindFirstChild("Characters")
+    local survFolder = chars and chars:FindFirstChild("Survivor")
+    if survFolder then
+        for _, charModel in pairs(survFolder:GetChildren()) do
+            local charName = charModel.Name
+            GlobalState.AH.DownedDB[charName] = {}
+            local ss    = charModel:FindFirstChild("scriptstuff")
+            local ani   = ss and ss:FindFirstChild("Animate")
+            local anims = ani and ani:FindFirstChild("Anims")
+            local downed = anims and anims:FindFirstChild("Downed")
+            if downed then
+                for _, track in pairs(downed:GetChildren()) do
+                    if track:IsA("Animation") and track.AnimationId then
+                        GlobalState.AH.DownedDB[charName][track.AnimationId] = true
+                    end
+                end
+            end
+        end
+    end
+end
+task.spawn(ScanDownedAssets)
+
+local function IsDowned(char)
+    if char:GetAttribute("State") == "downed" then return true end
+    local hum = char:FindFirstChild("Humanoid")
+    if hum then
+        local animator = hum:FindFirstChild("Animator")
+        if animator then
+            local charName = char:GetAttribute("Character") or char.Name
+            local db = GlobalState.AH.DownedDB[charName]
+            if db then
+                for _, track in pairs(animator:GetPlayingAnimationTracks()) do
+                    if db[track.Animation.AnimationId] then return true end
+                end
+            end
+        end
+    end
+    return false
+end
+
+local function GetBestTarget()
+    local myChar = LocalPlayer.Character
+    if not myChar or not myChar:FindFirstChild("HumanoidRootPart") then return nil end
+    local myPos = myChar.HumanoidRootPart.Position
+    local potential = {}
+
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local char = p.Character
+            local hum  = char:FindFirstChild("Humanoid")
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root and hum and hum.Health > 0 and not IsGameEXE(char) and not IsDowned(char) then
+                local charName = char:GetAttribute("Character") or char.Name
+                local allow = true
+                if GlobalConfig.AH.ManualTarget and GlobalConfig.AH.TargetChar ~= "None" then
+                    if charName ~= GlobalConfig.AH.TargetChar then allow = false end
+                end
+                if allow then
+                    table.insert(potential, {
+                        Model = char,
+                        Dist  = (root.Position - myPos).Magnitude,
+                        Prio  = PriorityList[charName] or 5
+                    })
+                end
+            end
+        end
+    end
+
+    if #potential == 0 then return nil end
+
+    if GlobalConfig.AH.Mode == "Nearest" then
+        table.sort(potential, function(a, b) return a.Dist < b.Dist end)
+    elseif GlobalConfig.AH.Mode == "Priority" then
+        table.sort(potential, function(a, b)
+            if a.Prio == b.Prio then return a.Dist < b.Dist end
+            return a.Prio > b.Prio
+        end)
+    elseif GlobalConfig.AH.Mode == "Random" then
+        return potential[math.random(1, #potential)].Model
+    end
+    return potential[1].Model
+end
+
+local function UpdateAHVisual(targetRoot)
+    local V = GlobalState.AH
+    if not V.Visual then
+        local bg = Instance.new("BillboardGui")
+        bg.Name        = "AH_Target_Visual"
+        bg.Size        = UDim2.fromOffset(110, 110)
+        bg.AlwaysOnTop = true
+        bg.Parent      = CoreGui
+        local img = Instance.new("ImageLabel", bg)
+        img.Size = UDim2.fromScale(1, 1)
+        img.BackgroundTransparency = 1
+        img.Image = "rbxassetid://10131954007"
+        V.Visual = { Gui = bg, Img = img, Rot = 0 }
+    end
+
+    if targetRoot then
+        V.Visual.Gui.Enabled = true
+        V.Visual.Gui.Adornee = targetRoot
+        V.Visual.Img.ImageColor3 = GlobalConfig.AH.Color
+        V.Visual.Rot = V.Visual.Rot + 5
+        V.Visual.Img.Rotation = V.Visual.Rot
+    else
+        V.Visual.Gui.Enabled = false
+    end
+end
+
+-- Combat UI
+TabCombat:AddSection("Auto Hunt Settings")
+
+TabCombat:AddToggle("AHTog", {
+    Title       = "Enable Auto Hunt",
+    Description = "Teleport & Kill Survivors",
+    Default     = false,
+    Callback    = function(v)
+        if v then
+            if GlobalState.CurrentPing > GlobalConfig.AH.PingLimit then
+                Fluent:Notify({
+                    Title   = "High Ping",
+                    Content = string.format("Ping %d > %d. Unsafe.", GlobalState.CurrentPing, GlobalConfig.AH.PingLimit),
+                    Duration = 3
+                })
+                if Options.AHTog then Options.AHTog:SetValue(false) end
+                return
+            end
+            ScanDownedAssets()
+            -- Disable Flight & Speed
+            if Options.FlyTog and Options.FlyTog.Value then Options.FlyTog:SetValue(false) end
+            if Options.SpeedTog and Options.SpeedTog.Value then Options.SpeedTog:SetValue(false) end
+            if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("AH", true) end
+        else
+            UpdateAHVisual(nil)
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                LocalPlayer.Character.HumanoidRootPart.Velocity = Vector3.zero
+            end
+            if GlobalState.UpdateMobileBtn then GlobalState.UpdateMobileBtn("AH", false) end
+        end
+        GlobalConfig.AH.Enabled = v
+    end
+})
+
+TabCombat:AddKeybind("AHBind", {
+    Title = "Auto Hunt Bind", Default = "H", Mode = "Toggle",
+    Callback = function() if Options.AHTog then Options.AHTog:SetValue(not Options.AHTog.Value) end end
+})
+
+TabCombat:AddSlider("AHHeight", {
+    Title       = "Hitbox Height (Up/Down)",
+    Description = "0 = Center. Pos = Up, Neg = Down",
+    Default     = 0, Min = -30, Max = 30, Rounding = 0,
+    Callback    = function(v) GlobalConfig.AH.Height = v end
+})
+
+TabCombat:AddSlider("AHDistance", {
+    Title       = "Hitbox Distance (Fwd/Bwd)",
+    Description = "0 = Center. Pos = Behind, Neg = Front",
+    Default     = 0, Min = -30, Max = 30, Rounding = 0,
+    Callback    = function(v) GlobalConfig.AH.Distance = v end
+})
+
+TabCombat:AddDropdown("AHMode", {
+    Title    = "Logic Mode",
+    Values   = { "Nearest", "Priority", "Random" },
+    Default  = "Nearest",
+    Callback = function(v) GlobalConfig.AH.Mode = v end
+})
+
+TabCombat:AddSection("Target Override")
+
+TabCombat:AddToggle("AHManualTog", {
+    Title    = "Target Manual Character",
+    Default  = false,
+    Callback = function(v) GlobalConfig.AH.ManualTarget = v end
+})
+
+local AHCharDrop = TabCombat:AddDropdown("AHCharSelect", {
+    Title    = "Select Character",
+    Values   = { "None" },
+    Default  = "None",
+    Callback = function(v) GlobalConfig.AH.TargetChar = v end
+})
+
+TabCombat:AddSection("Visuals & Settings")
+
+TabCombat:AddColorpicker("AHColor", {
+    Title    = "Indicator Color",
+    Default  = Color3.fromRGB(255, 0, 0),
+    Callback = function(v) GlobalConfig.AH.Color = v end
+})
+
+TabCombat:AddParagraph({ Title = "Ping Monitor", Content = "Waiting..." }):SetDesc("Safe Limit: " .. GlobalConfig.AH.PingLimit .. "ms")
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: ANIMATIONS TAB (Silver animations added from dump)
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabAnim = Tabs.Animations
+
+local AnimDB = {
+    ["R6"] = {
+        { Name = "Dance 1", Id = "182435998",  SoundId = "0" },
+        { Name = "Dance 2", Id = "182436842",  SoundId = "0" },
+        { Name = "Dance 3", Id = "182436935",  SoundId = "0" },
+    },
+    ["Sonic"] = {
+        { Name = "Baby Dance",  Id = "79203936383675",  SoundId = "90901236525070" },
+        { Name = "Relaxing",    Id = "104062552147146", SoundId = "96306683591059" },
+        { Name = "Waiting",     Id = "132709141019647", SoundId = "129956345965154" },
+        { Name = "Shonic",      Id = "124702409687881", SoundId = "119556420416832" },
+        { Name = "Medicine",    Id = "86397585701161",  SoundId = "81957643358938" },
+        { Name = "Paced",       Id = "117900173410005", SoundId = "78655470001151" },
+        { Name = "Impatience",  Id = "87992356942409",  SoundId = "2111554497" },
+        { Name = "TickTock",    Id = "95107785706455",  SoundId = "73526950119661" },
+        { Name = "PBJ",         Id = "113910526539334", SoundId = "119249777974685" },
+        { Name = "Ring Walk",   Id = "123377580352862", SoundId = "83964029063021" },
+        { Name = "Pipebomb 2",  Id = "130034868708651", SoundId = "119640578709774" },
+        { Name = "Diaries",     Id = "92897830029002",  SoundId = "76173803344707" },
+    },
+    ["Tails"] = {
+        { Name = "Rat Dance",   Id = "73313302543888",  SoundId = "105826132589844" },
+        { Name = "Sit",         Id = "132926716277265", SoundId = "139085759707240" },
+        { Name = "Cory",        Id = "118810363050448", SoundId = "128210514182301" },
+        { Name = "Pipebomb",    Id = "137946742808216", SoundId = "119640578709774" },
+        { Name = "Helicopter",  Id = "89515158858178",  SoundId = "137931208091292" },
+        { Name = "Who",         Id = "84541229170186",  SoundId = "83086967155682" },
+        { Name = "Horse",       Id = "93036777474390",  SoundId = "1842306536" },
+        { Name = "Goodbye",     Id = "96963375850749",  SoundId = "83964029063021" },
+    },
+    ["Knuckles"] = {
+        { Name = "Stephanie",      Id = "140682945610579", SoundId = "91940041220689" },
+        { Name = "ChillOut",       Id = "96036373262427",  SoundId = "89185337796161" },
+        { Name = "Aura",           Id = "97453636614232",  SoundId = "89185337796161" },
+        { Name = "Sitting",        Id = "79209172925447",  SoundId = "0" },
+        { Name = "Do That Thing",  Id = "78791270212133",  SoundId = "112624207180199" },
+        { Name = "Hit Every Beat", Id = "80597715589852",  SoundId = "120207366318005" },
+        { Name = "Fallen Kingdom", Id = "108656705089262", SoundId = "111893253196198" },
+    },
+    ["Amy"] = {
+        { Name = "Surprised",       Id = "95622465731556",  SoundId = "128251124090446" },
+        { Name = "Headbang",        Id = "113537674050921", SoundId = "135336648388670" },
+        { Name = "Dance of Justice", Id = "97841662978305", SoundId = "71722262464105" },
+        { Name = "Smiley",          Id = "83086430858295",  SoundId = "114050562679490" },
+        { Name = "Doodle",          Id = "107060462123341", SoundId = "99088950437194" },
+        { Name = "Static",          Id = "91094123750588",  SoundId = "130488583055563" },
+        { Name = "Love N Cavity",   Id = "76749834700097",  SoundId = "95398124962437" },
+        { Name = "Noodle",          Id = "111017557755415", SoundId = "127331265842362" },
+        { Name = "Eek!",            Id = "83310660894486",  SoundId = "118187270515767" },
+    },
+    ["Cream"] = {
+        { Name = "Overdrive", Id = "126157584199051", SoundId = "78649217959001" },
+        { Name = "Cat Swing", Id = "119996423025347", SoundId = "97335273261339" },
+        { Name = "Jevil Hop", Id = "137069582420732", SoundId = "110723101893449" },
+        { Name = "Penguin",   Id = "136126837988845", SoundId = "76378854930188" },
+        { Name = "Waving",    Id = "101475077691415", SoundId = "88033678198864" },
+        { Name = "Griddy",    Id = "88275250559180",  SoundId = "77501488098123" },
+    },
+    ["Eggman"] = {
+        { Name = "Egg Rolled",  Id = "109633747241470", SoundId = "77202079956843" },
+        { Name = "Sturdy",      Id = "123633884307468", SoundId = "78459140178909" },
+        { Name = "Boohoo",      Id = "118361359360130", SoundId = "0" },
+        { Name = "Master Plan", Id = "135726076356843", SoundId = "81715060320729" },
+        { Name = "Why Post",    Id = "75695304745148",  SoundId = "81715060320729" },
+        { Name = "Eggly",       Id = "125599236186100", SoundId = "104056772578784" },
+        { Name = "Bird Word",   Id = "126886074967700", SoundId = "75327454531443" },
+        { Name = "Forklift",    Id = "127435576488001", SoundId = "0" },
+    },
+    ["Silver"] = {
+        { Name = "Baby Dance",     Id = "79203936383675",  SoundId = "90901236525070" },
+        { Name = "Release Ghouls", Id = "76998542362740",  SoundId = "125819790931802" },
+        { Name = "Levitate Rest",  Id = "127010236869854", SoundId = "0" },
+    },
+    ["Blaze"] = {
+        { Name = "Release Ghouls", Id = "104705063785739", SoundId = "125819790931802" },
+        { Name = "Chinese Cat",    Id = "129541820196808", SoundId = "86638249245610" },
+        { Name = "Skachacha",      Id = "128435480269503", SoundId = "81579040406533" },
+    },
+    ["Metal Sonic"] = {
+        { Name = "Egg Rolled 2", Id = "128123227077719", SoundId = "103896803231829" },
+        { Name = "Fancy Style",  Id = "124654816579604", SoundId = "103189160690380" },
+        { Name = "Lonely",       Id = "116357078780443", SoundId = "77269072383403" },
+        { Name = "Thinking",     Id = "116585917682409", SoundId = "9043366464" },
+        { Name = "Come Closer",  Id = "76249045959187",  SoundId = "131169447699141" },
+    },
+    ["Shadow"] = {
+        { Name = "Baby Dance", Id = "79203936383675", SoundId = "90901236525070" },
+    },
+    ["2011X"] = {
+        { Name = "Maria Carey", Id = "92888638699962",  SoundId = "112568013507036" },
+        { Name = "Hype",        Id = "78545771079470",  SoundId = "126067106312692" },
+        { Name = "Jersey Hog",  Id = "127191399093079", SoundId = "112812055823784" },
+    },
+    ["Kolossos"] = {
+        { Name = "Miss Me",  Id = "81730809348394",  SoundId = "135366495265781" },
+        { Name = "Point",    Id = "140180851930686", SoundId = "0" },
+        { Name = "Metroman", Id = "107195453398060", SoundId = "99258536244671" },
+        { Name = "Laugh",    Id = "102779996718354", SoundId = "84405830596541" },
+    },
+    ["Fleetway"] = {
+        { Name = "Every Beat 2", Id = "99056305997710",  SoundId = "120207366318005" },
+        { Name = "Jevil Hop 2",  Id = "92404765326260",  SoundId = "127548237541414" },
+        { Name = "You A Jerk",   Id = "106340447585086", SoundId = "106119520633962" },
+    },
+    ["TailsDoll"] = {
+        { Name = "Tripwire Time", Id = "112656139256072", SoundId = "116253727062662" },
+        { Name = "Tripwire Sit",  Id = "92259033776440",  SoundId = "0" },
+        { Name = "Imposter",      Id = "100732265533480", SoundId = "104146703087176" },
+        { Name = "Caramell",      Id = "81240310070946",  SoundId = "110835760370936" },
+    },
+}
+
+local NameToKey = {
+    ["Tripwire"]     = "TailsDoll",
+    ["Tails Doll"]   = "TailsDoll",
+    ["MetalSonic"]   = "Metal Sonic",
+    ["2011x"]        = "2011X",
+    ["Super Sonic"]  = "Fleetway",
+    ["Lord X"]       = "Sonic",
+    ["EXE"]          = "Sonic",
+}
+
+local CharList = {}
+for k, _ in pairs(AnimDB) do table.insert(CharList, k) end
+table.sort(CharList)
+
+local function StopAnim()
+    local A = GlobalState.Anim
+    if A.Track then A.Track:Stop(); A.Track:Destroy(); A.Track = nil end
+    if A.Sound then A.Sound:Stop(); A.Sound:Destroy(); A.Sound = nil end
+end
+
+local function PlayAnim()
+    local A = GlobalState.Anim
+    if A.Track then StopAnim() end
+
+    local charKey = NameToKey[GlobalConfig.Anim.CurrentChar] or GlobalConfig.Anim.CurrentChar
+    local db = AnimDB[charKey]
+    if not db then return end
+
+    local animData = nil
+    for _, a in pairs(db) do
+        if a.Name == GlobalConfig.Anim.CurrentName then animData = a; break end
+    end
+
+    if animData and LocalPlayer.Character then
+        local hum  = LocalPlayer.Character:FindFirstChild("Humanoid")
+        local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hum and root then
+            local animator = hum:FindFirstChild("Animator") or Instance.new("Animator", hum)
+
+            local aObj = Instance.new("Animation")
+            aObj.AnimationId = "rbxassetid://" .. animData.Id
+
+            local s, track = pcall(function() return animator:LoadAnimation(aObj) end)
+            if s and track then
+                A.Track = track
+                A.Track.Priority = Enum.AnimationPriority.Action4
+                A.Track.Looped = true
+                A.Track:Play()
+
+                if animData.SoundId and animData.SoundId ~= "0" then
+                    A.Sound = Instance.new("Sound")
+                    A.Sound.Name    = "DoomAnimSound"
+                    A.Sound.SoundId = "rbxassetid://" .. animData.SoundId
+                    A.Sound.Volume  = GlobalConfig.Anim.MuteSound and 0 or GlobalConfig.Anim.Volume
+                    A.Sound.Looped  = true
+                    A.Sound.Parent  = root
+                    A.Sound:Play()
+                end
+
+                A.Track.Stopped:Connect(function()
+                    if Options.Anim_PlayTog then Options.Anim_PlayTog:SetValue(false) end
+                    StopAnim()
+                end)
+            else
+                Fluent:Notify({ Title = "Error", Content = "Invalid ID", Duration = 2 })
+                if Options.Anim_PlayTog then Options.Anim_PlayTog:SetValue(false) end
+            end
+        end
+    end
+end
+
+-- Anim UI
+TabAnim:AddSection("Animation Controls")
+
+local AnimCharDrop = TabAnim:AddDropdown("Anim_Char", {
+    Title    = "Character",
+    Values   = CharList,
+    Default  = "R6",
+    Callback = function(v)
+        GlobalConfig.Anim.CurrentChar = v
+        local key  = NameToKey[v] or v
+        local list = {}
+        if AnimDB[key] then
+            for _, a in pairs(AnimDB[key]) do table.insert(list, a.Name) end
+        end
+        if Options.Anim_Name then
+            Options.Anim_Name:SetValues(list)
+            if #list > 0 then Options.Anim_Name:SetValue(list[1]) end
+        end
+    end
+})
+
+TabAnim:AddDropdown("Anim_Name", {
+    Title    = "Animation",
+    Values   = { "Select Char" },
+    Default  = "...",
+    Callback = function(v)
+        GlobalConfig.Anim.CurrentName = v
+        if GlobalState.Anim.Track then
+            StopAnim()
+            PlayAnim()
+        end
+    end
+})
+
+TabAnim:AddToggle("Anim_Auto", {
+    Title       = "Auto Detect Character",
+    Description = "Updates list on character spawn",
+    Default     = false,
+    Callback    = function(v) GlobalConfig.Anim.AutoDetect = v end
+})
+
+TabAnim:AddToggle("Anim_PlayTog", {
+    Title    = "Play Animation",
+    Default  = false,
+    Callback = function(v)
+        if v then PlayAnim() else StopAnim() end
+    end
+})
+
+TabAnim:AddToggle("Anim_Mute", {
+    Title       = "Mute Animation Sound",
+    Description = "Disables playing sound entirely",
+    Default     = false,
+    Callback    = function(v)
+        GlobalConfig.Anim.MuteSound = v
+        local snd = GlobalState.Anim.Sound
+        if v and snd then
+            snd.Volume = 0
+        elseif not v and snd then
+            snd.Volume = GlobalConfig.Anim.Volume
+        end
+    end
+})
+
+TabAnim:AddSlider("Anim_Vol", {
+    Title    = "Sound Volume",
+    Default  = 2, Min = 0, Max = 6, Rounding = 1,
+    Callback = function(v)
+        GlobalConfig.Anim.Volume = v
+        local snd = GlobalState.Anim.Sound
+        if snd and not GlobalConfig.Anim.MuteSound then snd.Volume = v end
+    end
+})
+
+TabAnim:AddKeybind("Anim_Bind", {
+    Title    = "Animation Keybind",
+    Default  = "R",
+    Mode     = "Toggle",
+    Callback = function()
+        if Options.Anim_PlayTog then Options.Anim_PlayTog:SetValue(not Options.Anim_PlayTog.Value) end
+    end
+})
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: VISUALS TAB
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabVisuals    = Tabs.Visuals
+local Visuals_Folder = Instance.new("Folder", CoreGui)
+Visuals_Folder.Name  = "Doomsense_Vis_Logic"
+
+-- Validate / populate Visuals config with defaults
+local function ValidateConfig(tbl, defaults)
+    for key, value in pairs(defaults) do
+        if tbl[key] == nil then
+            tbl[key] = value
+        elseif type(value) == "table" and type(tbl[key]) == "table" then
+            ValidateConfig(tbl[key], value)
+        end
+    end
+end
+
+local VisualsDefaults = {
+    Chams = {
+        Surv_Enabled = false,
+        Surv_Style   = { Outline = true, Fill = true },
+        Surv_OutCol  = Color3.fromRGB(255, 255, 255),
+        Surv_FillCol = Color3.fromRGB(0, 255, 0),
+        Surv_Limp_Out = 0, Surv_Limp_Fill = 2,
+        
+        EXE_Enabled  = false,
+        EXE_Style    = { Outline = true, Fill = true },
+        EXE_OutCol   = Color3.fromRGB(255, 255, 255),
+        EXE_FillCol  = Color3.fromRGB(255, 0, 0),
+        EXE_Limp_Out = 0, EXE_Limp_Fill = 2,
+    },
+    TwoD = {
+        Enabled    = false,
+        GlobalLimp = 0,
+        OutCol     = Color3.fromRGB(255, 255, 255),
+        FillCol    = Color3.fromRGB(0, 0, 0),
+        RageFill   = Color3.fromRGB(255, 140, 0),
+        RageOut    = Color3.fromRGB(255, 255, 0),
+    },
+    Distance = {
+        Surv_Enabled = false,
+        Surv_OutCol  = Color3.fromRGB(0, 0, 0),
+        Surv_FillCol = Color3.fromRGB(255, 255, 255),
+        Surv_Limp    = 0,
+        EXE_Enabled  = false,
+        EXE_OutCol   = Color3.fromRGB(0, 0, 0),
+        EXE_FillCol  = Color3.fromRGB(255, 0, 0),
+        EXE_Limp     = 0,
+    },
+    Pad = {
+        Enabled  = false,
+        Style    = { Outline = true, Fill = true },
+        OutCol   = Color3.fromRGB(255, 255, 0),
+        FillCol  = Color3.fromRGB(255, 255, 0),
+        Limp_Out = 0, Limp_Fill = 2,
+    },
+    Night = {
+        Enabled    = false,
+        LightValue = 5,
+        AmbCol     = Color3.fromRGB(50, 50, 80),
+        lightCol   = Color3.fromRGB(0, 0, 0),
+    },
+    Local = {
+        Enabled  = false,
+        Style    = { Outline = true, Fill = true },
+        OutCol   = Color3.fromRGB(255, 255, 255),
+        FillCol  = Color3.fromRGB(100, 100, 255),
+        Limp_Out = 0, Limp_Fill = 2,
+    },
+}
+
+ValidateConfig(GlobalConfig.Visuals, VisualsDefaults)
+local Cfg = GlobalConfig.Visuals
+
+local function GetTrans(sliderVal, isEnabled)
+    if not isEnabled then return 1 end
+    return math.clamp(sliderVal / 5, 0, 1)
+end
+
+local RAGE_IDS = { "72233377540950", "9057530869" }
+local function IsRageCheck(model)
+    local n = model:GetAttribute("Character") or model.Name
+    if string.find(string.lower(n), "2011x") then
+        if model:GetAttribute("RageMode") or model:FindFirstChild("RageFill", true) then return true end
+        for _, s in pairs(SoundService:GetDescendants()) do
+            if s:IsA("Sound") and s.Playing then
+                for _, id in pairs(RAGE_IDS) do if string.find(s.SoundId, id) then return true end end
+            end
+        end
+    end
+    return false
+end
+
+local function GetHighlight(model)
+    local cache = GlobalState.Vis.HighlightCache
+    if not cache[model] then
+        local hl = Instance.new("Highlight")
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        hl.Parent    = Visuals_Folder
+        cache[model] = hl
+    end
+    return cache[model]
+end
+
+local function GetTags(model)
+    local cache = GlobalState.Vis.TagCache
+    if not cache[model] then
+        local bbTop = Instance.new("BillboardGui")
+        bbTop.Size        = UDim2.new(0, 200, 0, 50)
+        bbTop.StudsOffset = Vector3.new(0, 3.5, 0)
+        bbTop.AlwaysOnTop = true
+        bbTop.Parent      = Visuals_Folder
+        local txtTop = Instance.new("TextLabel")
+        txtTop.Size                 = UDim2.new(1, 0, 1, 0)
+        txtTop.BackgroundTransparency = 1
+        txtTop.Font                 = Enum.Font.GothamBold
+        txtTop.TextSize             = 14
+        txtTop.TextStrokeTransparency = 0
+        txtTop.Parent               = bbTop
+
+        local bbBot = Instance.new("BillboardGui")
+        bbBot.Size        = UDim2.new(0, 200, 0, 50)
+        bbBot.StudsOffset = Vector3.new(0, -4.5, 0)
+        bbBot.AlwaysOnTop = true
+        bbBot.Parent      = Visuals_Folder
+        local txtBot = Instance.new("TextLabel")
+        txtBot.Size                 = UDim2.new(1, 0, 1, 0)
+        txtBot.BackgroundTransparency = 1
+        txtBot.Font                 = Enum.Font.Gotham
+        txtBot.TextSize             = 12
+        txtBot.TextStrokeTransparency = 0
+        txtBot.Parent               = bbBot
+
+        cache[model] = {
+            TopGui = bbTop, TopLbl = txtTop,
+            BotGui = bbBot, BotLbl = txtBot,
+        }
+    end
+    return cache[model]
+end
+
+-- Visuals UI
+local SecChams = TabVisuals:AddSection("Chams (Wallhack)")
+SecChams:AddParagraph({ Title = "Survivor Chams", Content = "" })
+SecChams:AddToggle("Chams_S_Tog", { Title = "Enable Survivor Chams", Default = Cfg.Chams.Surv_Enabled, Callback = function(v) Cfg.Chams.Surv_Enabled = v end })
+SecChams:AddDropdown("Chams_S_Style", { Title = "Survivor Style Options", Values = {"Outline","Fill"}, Multi = true, Default = {"Outline","Fill"}, Callback = function(v) Cfg.Chams.Surv_Style = v end })
+SecChams:AddColorpicker("Chams_S_Out",  { Title = "Surv Outline Color", Default = Cfg.Chams.Surv_OutCol, Callback = function(v) Cfg.Chams.Surv_OutCol = v end })
+SecChams:AddColorpicker("Chams_S_Fill", { Title = "Surv Fill Color",    Default = Cfg.Chams.Surv_FillCol, Callback = function(v) Cfg.Chams.Surv_FillCol = v end })
+SecChams:AddSlider("Chams_S_LO", { Title = "Surv Outline Transparency", Min = 0, Max = 5, Default = Cfg.Chams.Surv_Limp_Out, Rounding = 1, Callback = function(v) Cfg.Chams.Surv_Limp_Out = v end })
+SecChams:AddSlider("Chams_S_LF", { Title = "Surv Fill Transparency",    Min = 0, Max = 5, Default = Cfg.Chams.Surv_Limp_Fill, Rounding = 1, Callback = function(v) Cfg.Chams.Surv_Limp_Fill = v end })
+
+SecChams:AddParagraph({ Title = "EXE Chams", Content = "" })
+SecChams:AddToggle("Chams_E_Tog", { Title = "Enable EXE Chams", Default = Cfg.Chams.EXE_Enabled, Callback = function(v) Cfg.Chams.EXE_Enabled = v end })
+SecChams:AddDropdown("Chams_E_Style", { Title = "EXE Style Options", Values = {"Outline","Fill"}, Multi = true, Default = {"Outline","Fill"}, Callback = function(v) Cfg.Chams.EXE_Style = v end })
+SecChams:AddColorpicker("Chams_E_Out",  { Title = "EXE Outline Color", Default = Cfg.Chams.EXE_OutCol, Callback = function(v) Cfg.Chams.EXE_OutCol = v end })
+SecChams:AddColorpicker("Chams_E_Fill", { Title = "EXE Fill Color",    Default = Cfg.Chams.EXE_FillCol, Callback = function(v) Cfg.Chams.EXE_FillCol = v end })
+SecChams:AddSlider("Chams_E_LO", { Title = "EXE Outline Transparency", Min = 0, Max = 5, Default = Cfg.Chams.EXE_Limp_Out, Rounding = 1, Callback = function(v) Cfg.Chams.EXE_Limp_Out = v end })
+SecChams:AddSlider("Chams_E_LF", { Title = "EXE Fill Transparency",    Min = 0, Max = 5, Default = Cfg.Chams.EXE_Limp_Fill, Rounding = 1, Callback = function(v) Cfg.Chams.EXE_Limp_Fill = v end })
+
+local Sec2D = TabVisuals:AddSection("2D Tags (EXE/RAGE/Distance)")
+Sec2D:AddToggle("2D_Tag",       { Title = "Enable Tags (Role)", Default = Cfg.TwoD.Enabled, Callback = function(v) Cfg.TwoD.Enabled = v end })
+Sec2D:AddSlider("2D_GlobalLimp", { Title = "Role Text Transparency", Min = 0, Max = 5, Default = Cfg.TwoD.GlobalLimp, Rounding = 1, Callback = function(v) Cfg.TwoD.GlobalLimp = v end })
+Sec2D:AddParagraph({ Title = "Standard Colors", Content = "For normal EXE state" })
+Sec2D:AddColorpicker("2D_OutCol",  { Title = "Text Outline",  Default = Cfg.TwoD.OutCol,  Callback = function(v) Cfg.TwoD.OutCol = v end })
+Sec2D:AddColorpicker("2D_FillCol", { Title = "Text Color",    Default = Cfg.TwoD.FillCol, Callback = function(v) Cfg.TwoD.FillCol = v end })
+Sec2D:AddParagraph({ Title = "RAGE Colors", Content = "Specific colors for 2011x Rage Mode" })
+Sec2D:AddColorpicker("Rage_Fill", { Title = "RAGE Text Color",    Default = Cfg.TwoD.RageFill, Callback = function(v) Cfg.TwoD.RageFill = v end })
+Sec2D:AddColorpicker("Rage_Out",  { Title = "RAGE Outline Color", Default = Cfg.TwoD.RageOut,  Callback = function(v) Cfg.TwoD.RageOut = v end })
+
+Sec2D:AddParagraph({ Title = "Distance Settings", Content = "1m = 3.57 studs (Tags displayed below feet)" })
+Sec2D:AddToggle("Dist_S_Tog",       { Title = "Survivor Distance",       Default = Cfg.Distance.Surv_Enabled, Callback = function(v) Cfg.Distance.Surv_Enabled = v end })
+Sec2D:AddColorpicker("Dist_S_Out",  { Title = "S. distance text Outline", Default = Cfg.Distance.Surv_OutCol, Callback = function(v) Cfg.Distance.Surv_OutCol = v end })
+Sec2D:AddColorpicker("Dist_S_Fill", { Title = "S. distance text fill",    Default = Cfg.Distance.Surv_FillCol, Callback = function(v) Cfg.Distance.Surv_FillCol = v end })
+Sec2D:AddSlider("Dist_S_Limp",      { Title = "S. distance Transparency", Min = 0, Max = 5, Default = Cfg.Distance.Surv_Limp, Rounding = 1, Callback = function(v) Cfg.Distance.Surv_Limp = v end })
+Sec2D:AddToggle("Dist_E_Tog",       { Title = "EXE Distance",            Default = Cfg.Distance.EXE_Enabled, Callback = function(v) Cfg.Distance.EXE_Enabled = v end })
+Sec2D:AddColorpicker("Dist_E_Out",  { Title = "E. distance text Outline", Default = Cfg.Distance.EXE_OutCol, Callback = function(v) Cfg.Distance.EXE_OutCol = v end })
+Sec2D:AddColorpicker("Dist_E_Fill", { Title = "E. distance text fill",    Default = Cfg.Distance.EXE_FillCol, Callback = function(v) Cfg.Distance.EXE_FillCol = v end })
+Sec2D:AddSlider("Dist_E_Limp",      { Title = "E. distance Transparency", Min = 0, Max = 5, Default = Cfg.Distance.EXE_Limp, Rounding = 1, Callback = function(v) Cfg.Distance.EXE_Limp = v end })
+
+local SecPad = TabVisuals:AddSection("Pad ESP")
+SecPad:AddToggle("Pad_Tog",        { Title = "Show Pads",       Default = Cfg.Pad.Enabled, Callback = function(v) Cfg.Pad.Enabled = v end })
+SecPad:AddDropdown("Pad_Style",    { Title = "Style Options", Values = {"Outline","Fill"}, Multi = true, Default = {"Outline","Fill"}, Callback = function(v) Cfg.Pad.Style = v end })
+SecPad:AddColorpicker("Pad_OutCol", { Title = "Pad Outline",    Default = Cfg.Pad.OutCol,  Callback = function(v) Cfg.Pad.OutCol = v end })
+SecPad:AddColorpicker("Pad_FillCol",{ Title = "Pad Fill",       Default = Cfg.Pad.FillCol, Callback = function(v) Cfg.Pad.FillCol = v end })
+SecPad:AddSlider("Pad_LimpOut",     { Title = "Outline Transp.", Min = 0, Max = 5, Default = Cfg.Pad.Limp_Out, Rounding = 1, Callback = function(v) Cfg.Pad.Limp_Out = v end })
+SecPad:AddSlider("Pad_LimpFill",    { Title = "Fill Transp.",   Min = 0, Max = 5, Default = Cfg.Pad.Limp_Fill, Rounding = 1, Callback = function(v) Cfg.Pad.Limp_Fill = v end })
+
+local SecNight = TabVisuals:AddSection("Atmosphere & World")
+SecNight:AddToggle("Night_Tog", {
+    Title = "Night Mode", Default = Cfg.Night.Enabled,
+    Callback = function(v)
+        Cfg.Night.Enabled = v
+        if not v then
+            Lighting.TimeOfDay = "12:00:00"
+            Lighting.ColorShift_Top    = Color3.new(0, 0, 0)
+            Lighting.ColorShift_Bottom = Color3.new(0, 0, 0)
+        end
+    end
+})
+SecNight:AddColorpicker("Night_Amb", { Title = "Night Color (Ambient)", Default = Cfg.Night.AmbCol,  Callback = function(v) Cfg.Night.AmbCol = v end })
+SecNight:AddColorpicker("light_Col", { Title = "Light Color",          Default = Cfg.Night.lightCol, Callback = function(v) Cfg.Night.lightCol = v end })
+
+local SecRem = TabVisuals:AddSection("Removals")
+SecRem:AddButton({ Title = "Delete Water Effect", Callback = function()
+    local cam = Workspace.CurrentCamera
+    if cam:FindFirstChild("WaterBlur")       then cam.WaterBlur:Destroy() end
+    if cam:FindFirstChild("WaterCorrection") then cam.WaterCorrection:Destroy() end
+    if Lighting:FindFirstChild("Atmosphere") then Lighting.Atmosphere:Destroy() end
+    if Lighting:FindFirstChild("Sky")        then Lighting.Sky:Destroy() end
+    Fluent:Notify({ Title = "World", Content = "Water Deleted", Duration = 2 })
+end })
+SecRem:AddButton({ Title = "Remove Blur Effect", Callback = function()
+    for _, v in pairs(Lighting:GetChildren()) do
+        if v:IsA("BlurEffect") then v:Destroy() end
+    end
+    Fluent:Notify({ Title = "World", Content = "Blur Removed", Duration = 2 })
+end })
+
+local SecLocal = TabVisuals:AddSection("Local Player")
+SecLocal:AddToggle("Loc_Tog",        { Title = "Local Chams",    Default = Cfg.Local.Enabled, Callback = function(v) Cfg.Local.Enabled = v end })
+SecLocal:AddDropdown("Loc_Style",     { Title = "Style", Values = {"Outline","Fill"}, Multi = true, Default = {"Outline","Fill"}, Callback = function(v) Cfg.Local.Style = v end })
+SecLocal:AddColorpicker("Loc_OutCol", { Title = "Outline Color", Default = Cfg.Local.OutCol,  Callback = function(v) Cfg.Local.OutCol = v end })
+SecLocal:AddColorpicker("Loc_FillCol",{ Title = "Fill Color",    Default = Cfg.Local.FillCol, Callback = function(v) Cfg.Local.FillCol = v end })
+SecLocal:AddSlider("Loc_LimpOut",     { Title = "Outline Transp.", Min = 0, Max = 5, Default = Cfg.Local.Limp_Out, Rounding = 1, Callback = function(v) Cfg.Local.Limp_Out = v end })
+SecLocal:AddSlider("Loc_LimpFill",    { Title = "Fill Transp.",   Min = 0, Max = 5, Default = Cfg.Local.Limp_Fill, Rounding = 1, Callback = function(v) Cfg.Local.Limp_Fill = v end })
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: CUSTOM LMS TAB
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabLMS = Tabs.LMS
+
+local LMS_Originals_Lookup = {
+    ["AmySolo"] = true, ["BlazeSolo"] = true, ["CreamSolo"] = true,
+    ["EggmanSolo"] = true, ["KnucklesSolo"] = true, ["MetalSonicSolo"] = true,
+    ["ShadowSolo"] = true, ["SilverSolo"] = true, ["SonicSolo"] = true,
+    ["SuperSonicSolo"] = true, ["TailsSolo"] = true,
+}
+
+local DOD_Assets = {
+    Survivor = {
+        ["Cream"]       = "rbxassetid://110574647259027",
+        ["Sonic"]       = "rbxassetid://116105674203386",
+        ["Blaze"]       = "rbxassetid://132823832100556",
+        ["Silver"]      = "rbxassetid://127572902749122",
+        ["Tails"]       = "rbxassetid://127820761709025",
+        ["Knuckles"]    = "rbxassetid://83319953418213",
+        ["MetalSonic"]  = "rbxassetid://139874742917760",
+        ["Metal Sonic"] = "rbxassetid://139874742917760",
+        ["Eggman"]      = "rbxassetid://85769780673032",
+        ["Amy"]         = "rbxassetid://111226713397041",
+        ["Shadow"]      = "rbxassetid://113857022513506",
+        ["SuperSonic"]  = "rbxassetid://112771236848699",
+        ["Super Sonic"] = "rbxassetid://112771236848699",
+    },
+    EXE = {
+        ["TailsDoll"]     = "rbxassetid://88717022359465",
+        ["Tripwire"]      = "rbxassetid://88717022359465",
+        ["Kolossos"]      = "rbxassetid://119601323636555",
+        ["2011x"]         = "rbxassetid://121016358955184",
+        ["Fleetway"]      = "rbxassetid://126606461926165",
+        ["Furnace"]       = "rbxassetid://117495151098938",
+        ["LegacyFurnace"] = "rbxassetid://102159711895519",
+        ["OldFurnace"]    = "rbxassetid://102159711895519",
+        ["Lord X"]        = "rbxassetid://93696635906407",
+        ["2017x"]         = "rbxassetid://120562962195804",
+        ["Executor"]      = "rbxassetid://120562962195804",
+    },
+}
+
+-- LMS Helper functions
+local function GetAssetSafe(path)
+    if not isfile(path) then return nil end
+    local func = getcustomasset or getsynasset
+    if func then
+        local s, res = pcall(func, path)
+        if s then return res end
+    end
+    return nil
+end
+
+local function PlayFXSound(id, baseVolume)
+    local masterVol = GlobalConfig.LMS.EffectVolume or 1
+    local s     = Instance.new("Sound")
+    s.SoundId   = "rbxassetid://" .. id
+    s.Volume    = baseVolume * masterVol
+    s.Parent    = SoundService
+    s.Name      = "LMS_FX_Audio"
+    s:Play()
+    Debris:AddItem(s, 10)
+    return s
+end
+
+local function GetCharName(plr)
+    if not plr or not plr.Character then return "Unknown" end
+    return plr.Character:GetAttribute("Character") or plr.Character.Name
+end
+
+local function GetFilesList()
+    local list = { "None" }
+    if isfolder(LMS_DIR) then
+        local success, files = pcall(listfiles, LMS_DIR)
+        if success and files then
+            for _, path in pairs(files) do
+                if string.match(path, "%.ogg$") or string.match(path, "%.mp3$") then
+                    local name = string.match(path, "[^/\\]+$")
+                    name = string.gsub(name, "%.ogg$", ""):gsub("%.mp3$", "")
+                    table.insert(list, name)
+                end
+            end
+        end
+    end
+    table.sort(list)
+    return list
+end
+
+local function UpdateLMSAssetID(name)
+    if name == "None" or not name then
+        GlobalState.LMS.CurrentAssetID = nil
+        return
+    end
+    local p1 = LMS_DIR .. "/" .. name .. ".ogg"
+    local p2 = LMS_DIR .. "/" .. name .. ".mp3"
+    local finalPath = isfile(p1) and p1 or (isfile(p2) and p2 or nil)
+    GlobalState.LMS.CurrentAssetID = finalPath and GetAssetSafe(finalPath) or nil
+end
+
+-- LMS Visual Effects
+local FX_Gui = Instance.new("ScreenGui")
+FX_Gui.Name          = "Doomsense_LMS_FX"
+FX_Gui.Parent        = CoreGui
+FX_Gui.IgnoreGuiInset = true
+FX_Gui.DisplayOrder  = 100
+
+local LMS_Visuals = {}
+
+LMS_Visuals["It's Pizza Time!"] = function()
+    local img = Instance.new("ImageLabel")
+    img.Parent              = FX_Gui
+    img.BackgroundTransparency = 1
+    img.Size                = UDim2.fromScale(0.55, 0.4)
+    img.SizeConstraint      = Enum.SizeConstraint.RelativeYY
+    img.AnchorPoint         = Vector2.new(0.5, 0.5)
+    img.Position            = UDim2.fromScale(0.5, 1.5)
+    img.Image               = "rbxassetid://77264911614141"
+
+    PlayFXSound("96050676918804", 1)
+    TweenService:Create(img, TweenInfo.new(5, Enum.EasingStyle.Linear), { Position = UDim2.fromScale(0.5, -0.5) }):Play()
+
+    task.spawn(function()
+        local toggle = false
+        while img and img.Parent and img.Position.Y.Scale > -0.5 do
+            img.Image = toggle and "rbxassetid://77264911614141" or "rbxassetid://92555127882199"
+            toggle = not toggle
+            task.wait(0.05)
+        end
+        if img then img:Destroy() end
+    end)
+end
+
+LMS_Visuals["FNF Style"] = function()
+    local snd = PlayFXSound("6555005549", 0.3)
+    task.wait(0.85)
+
+    local function CreateText(id)
+        local im = Instance.new("ImageLabel", FX_Gui)
+        im.Size                = UDim2.fromScale(0.4, 0.2)
+        im.SizeConstraint      = Enum.SizeConstraint.RelativeYY
+        im.AnchorPoint         = Vector2.new(0.5, 0.5)
+        im.Position            = UDim2.fromScale(0.5, 0.5)
+        im.BackgroundTransparency = 1
+        im.Image               = "rbxassetid://" .. id
+        im.ImageTransparency   = 1
+        return im
+    end
+
+    task.spawn(function()
+        local r = CreateText("6443228613")
+        TweenService:Create(r, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play()
+        task.wait(0.6)
+        TweenService:Create(r, TweenInfo.new(0.1), { ImageTransparency = 1, Position = UDim2.fromScale(0.5, 0.4) }):Play()
+        r:Destroy()
+
+        local s = CreateText("6443225217")
+        TweenService:Create(s, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play()
+        task.wait(0.6)
+        TweenService:Create(s, TweenInfo.new(0.1), { ImageTransparency = 1, Position = UDim2.fromScale(0.5, 0.4) }):Play()
+        s:Destroy()
+
+        local g = CreateText("6443224742")
+        TweenService:Create(g, TweenInfo.new(0.1), { ImageTransparency = 0 }):Play()
+        task.wait(0.8)
+        TweenService:Create(g, TweenInfo.new(0.5), { ImageTransparency = 1, Size = UDim2.fromScale(0.6, 0.3) }):Play()
+        g:Destroy()
+    end)
+end
+
+LMS_Visuals["DOD (Duel)"] = function()
+    local L = GlobalState.LMS
+    local survPlr = L.Survivor or LocalPlayer
+    local exePlr  = L.Killer   or Players:GetPlayers()[1] or LocalPlayer
+    if not survPlr then survPlr = LocalPlayer end
+
+    local survChar = GetCharName(survPlr)
+    local exeChar  = GetCharName(exePlr)
+    local survImg  = DOD_Assets.Survivor[survChar] or "rbxassetid://116105674203386"
+    local exeImg   = DOD_Assets.EXE[exeChar]       or "rbxassetid://121016358955184"
+
+    PlayFXSound("132670234831172", 0.5)
+
+    local bg = Instance.new("Frame", FX_Gui)
+    bg.Size             = UDim2.fromScale(1, 1)
+    bg.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+    bg.BackgroundTransparency = 1
+
+    TweenService:Create(bg, TweenInfo.new(0.3, Enum.EasingStyle.Sine), { BackgroundTransparency = 0.65 }):Play()
+    task.delay(0.3, function()
+        TweenService:Create(bg, TweenInfo.new(0.5, Enum.EasingStyle.Sine), { BackgroundTransparency = 1 }):Play()
+    end)
+
+    local function SpawnSprite(imgId, startPos, endPos, name)
+        local box = Instance.new("Frame", bg)
+        box.Size            = UDim2.fromScale(0.18, 0.45)
+        box.AnchorPoint     = Vector2.new(0.5, 0.5)
+        box.Position        = startPos
+        box.BackgroundTransparency = 1
+
+        if imgId == "rbxassetid://139874742917760" then
+            local flipFrame = Instance.new("Frame", box)
+            flipFrame.Size     = UDim2.fromScale(1, 1)
+            flipFrame.BackgroundTransparency = 1
+            flipFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+            flipFrame.Position    = UDim2.fromScale(0.5, 0.5)
+            local im = Instance.new("ImageLabel", flipFrame)
+            im.Size = UDim2.fromScale(-1, 1); im.Position = UDim2.fromScale(1, 0)
+            im.BackgroundTransparency = 1; im.Image = imgId; im.ScaleType = Enum.ScaleType.Fit
+        else
+            local im = Instance.new("ImageLabel", box)
+            im.Size = UDim2.fromScale(1, 1); im.BackgroundTransparency = 1
+            im.Image = imgId; im.ScaleType = Enum.ScaleType.Fit
+        end
+
+        local tagBox = Instance.new("Frame", box)
+        tagBox.BackgroundColor3 = Color3.new(0, 0, 0)
+        tagBox.Size = UDim2.fromScale(1.0, 0.15); tagBox.Position = UDim2.fromScale(0, -0.2)
+        tagBox.BorderSizePixel = 0
+        local lbl = Instance.new("TextLabel", tagBox)
+        lbl.Size = UDim2.fromScale(1, 1); lbl.BackgroundTransparency = 1
+        lbl.Text = name; lbl.TextColor3 = Color3.new(1, 1, 1)
+        lbl.Font = Enum.Font.GothamBold; lbl.TextScaled = true
+
+        TweenService:Create(box, TweenInfo.new(0.8, Enum.EasingStyle.Exponential, Enum.EasingDirection.Out), { Position = endPos }):Play()
+        return box
+    end
+
+    task.delay(0.4, function()
+        local sBox = SpawnSprite(survImg, UDim2.fromScale(-0.3, 0.5), UDim2.fromScale(0.25, 0.5), survPlr.Name)
+        local eBox = SpawnSprite(exeImg,  UDim2.fromScale(1.3, 0.5),  UDim2.fromScale(0.75, 0.5), exePlr.Name)
+
+        task.delay(3, function()
+            TweenService:Create(sBox, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.fromScale(-0.3, 0.5) }):Play()
+            TweenService:Create(eBox, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = UDim2.fromScale(1.3, 0.5) }):Play()
+            task.wait(0.5)
+            bg:Destroy()
+        end)
+    end)
+end
+
+local EffectList = { "None", "It's Pizza Time!", "FNF Style", "DOD (Duel)" }
+
+-- LMS Audio helpers
+local function FindSoloFolder()
+    local L = GlobalState.LMS
+    if L.CachedFolder and L.CachedFolder.Parent then return L.CachedFolder end
+    local candidates = {
+        SoundService, Workspace,
+        ReplicatedStorage:FindFirstChild("ClientAssets") and ReplicatedStorage.ClientAssets:FindFirstChild("Sounds")
+        and ReplicatedStorage.ClientAssets.Sounds:FindFirstChild("mus") and ReplicatedStorage.ClientAssets.Sounds.mus:FindFirstChild("Game")
+        and ReplicatedStorage.ClientAssets.Sounds.mus.Game:FindFirstChild("Round") and ReplicatedStorage.ClientAssets.Sounds.mus.Game.Round:FindFirstChild("SoloTheme")
+    }
+    for _, f in pairs(candidates) do
+        if f then
+            for name, _ in pairs(LMS_Originals_Lookup) do
+                if f:FindFirstChild(name) then L.CachedFolder = f; return f end
+            end
+        end
+    end
+    return SoundService
+end
+
+local function GetShadowSound()
+    local s = SoundService:FindFirstChild("Doomsense_LMS_Shadow")
+    if not s then
+        s = Instance.new("Sound")
+        s.Name    = "Doomsense_LMS_Shadow"
+        s.SoundId = "rbxassetid://0"
+        s.Volume  = 0
+        s.Looped  = true
+        s.Parent  = SoundService
+    end
+    return s
+end
+
+local function TriggerSteppedStop(shadow)
+    local L = GlobalState.LMS
+    if not L.IsCapturing then return end
+    L.IsCapturing = false
+    local fadeTween = TweenService:Create(shadow, TweenInfo.new(3, Enum.EasingStyle.Linear), { Volume = 0 })
+    fadeTween:Play()
+    fadeTween.Completed:Once(function()
+        if shadow.Volume == 0 and shadow.Playing then shadow:Stop() end
+    end)
+end
+
+-- LMS UI
+TabLMS:AddSection("Custom LMS Control")
+
+TabLMS:AddToggle("LMS_MainToggle", {
+    Title       = "Enable Custom LMS",
+    Description = "Replace boss music with local file",
+    Default     = GlobalConfig.LMS.Enabled,
+    Callback    = function(v) GlobalConfig.LMS.Enabled = v end
+})
+
+TabLMS:AddSlider("LMS_VolumeSlider", {
+    Title   = "Music Volume",
+    Default = 1.2, Min = 0, Max = 5, Rounding = 1,
+    Callback = function(v) GlobalConfig.LMS.Volume = v end
+})
+
+TabLMS:AddSlider("LMS_FXVolumeSlider", {
+    Title   = "Start Effect Volume",
+    Default = 1, Min = 0, Max = 5, Rounding = 1,
+    Callback = function(v) GlobalConfig.LMS.EffectVolume = v end
+})
+
+TabLMS:AddDropdown("LMS_StartEffect", {
+    Title    = "Start Effect",
+    Values   = EffectList,
+    Default  = "None",
+    Callback = function(v) GlobalConfig.LMS.StartEffect = v end
+})
+
+TabLMS:AddButton({
+    Title       = "Test Effect",
+    Description = "Preview selected start effect",
+    Callback    = function()
+        local fxName = GlobalConfig.LMS.StartEffect
+        if fxName and fxName ~= "None" and LMS_Visuals[fxName] then
+            Fluent:Notify({ Title = "LMS Test", Content = "Playing: " .. fxName, Duration = 2 })
+            task.spawn(LMS_Visuals[fxName])
+        else
+            Fluent:Notify({ Title = "LMS Test", Content = "No effect selected", Duration = 2 })
+        end
+    end
+})
+
+TabLMS:AddSection("File Selection")
+
+local TrackDrop = TabLMS:AddDropdown("LMS_FileSelect", {
+    Title    = "Select Track",
+    Values   = GetFilesList(),
+    Default  = "None",
+    Callback = function(v)
+        GlobalConfig.LMS.Track = v
+        UpdateLMSAssetID(v)
+    end
+})
+
+TabLMS:AddButton({
+    Title    = "Refresh Files",
+    Callback = function()
+        local list = GetFilesList()
+        TrackDrop:SetValues(list)
+        TrackDrop:SetValue("None")
+        Fluent:Notify({ Title = "LMS", Content = "Refreshed", Duration = 1 })
+    end
+})
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: MOBILE TAB
+-- ═════════════════════════════════════════════════════════════════════════
+
+local TabMobile = Tabs.Mobile
+
+local MobileControl = {
+    Buttons   = {},
+    IsVisible = true,
+    EditMode  = false,
+}
+
+local ButtonSettings = {
+    Menu     = { Size = 50, Transp = 0, Enabled = true },
+    HideUI   = { Size = 50, Transp = 0, Enabled = true },
+    Fly      = { Size = 50, Transp = 0, Enabled = true },
+    Speed    = { Size = 50, Transp = 0, Enabled = true },
+    ART      = { Size = 50, Transp = 0, Enabled = true },
+    Teleport = { Size = 50, Transp = 0, Enabled = true },
+    AH       = { Size = 50, Transp = 0, Enabled = true },
+    Anim     = { Size = 50, Transp = 0, Enabled = true },
+    Silver   = { Size = 50, Transp = 0, Enabled = true },
+}
+
+local MOB_ICONS = {
+    Menu     = "rbxassetid://7539983773",
+    Fly      = "rbxassetid://13288142767",
+    Speed    = "rbxassetid://6684648436",
+    Anim     = "rbxassetid://12099513379",
+    ART      = "rbxassetid://13145097542",
+    EditOff  = "rbxassetid://4772171909",
+    EditOn   = "rbxassetid://9735358798",
+    TP       = "rbxassetid://12941020168",
+    EyeOpen  = "rbxassetid://6473251976",
+    EyeClose = "rbxassetid://6473252651",
+    AH       = "rbxassetid://10723395457",
+    Lock     = "rbxassetid://15117261700",
+    Silver   = "rbxassetid://99162408431074",
+}
+
+local MobileScreenGui = Instance.new("ScreenGui")
+MobileScreenGui.Name             = "Doomsense_Mobile_Overlay"
+MobileScreenGui.Parent           = CoreGui
+MobileScreenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+MobileScreenGui.ResetOnSpawn     = false
+MobileScreenGui.IgnoreGuiInset   = true
+MobileScreenGui.Enabled          = GlobalConfig.ShowMobileBtn
+
+local HttpService = game:GetService("HttpService")
+local PosFilePath = "Doomsense/cfg/MobilePositions.json"
+
+function MobileControl:SavePositions()
+    local data = {}
+    for id, btn in pairs(self.Buttons) do
+        if btn.Canvas then
+            local pos = btn.Canvas.Position
+            data[id] = { XScale = pos.X.Scale, XOffset = pos.X.Offset, YScale = pos.Y.Scale, YOffset = pos.Y.Offset }
+        end
+    end
+    pcall(function() writefile(PosFilePath, HttpService:JSONEncode(data)) end)
+end
+
+local function GetSavedPos(id, defaultPos)
+    local s, res = pcall(function()
+        if isfile(PosFilePath) then return HttpService:JSONDecode(readfile(PosFilePath)) end
+    end)
+    if s and type(res) == "table" and res[id] then
+        return UDim2.new(res[id].XScale, res[id].XOffset, res[id].YScale, res[id].YOffset)
+    end
+    return defaultPos
+end
+
+function MobileControl:GetCurrentColors()
+    local themeName = Fluent.Theme or "Dark"
+    local colors = {
+        Main   = Color3.fromRGB(60, 60, 60),
+        Accent = Color3.fromRGB(96, 205, 255),
+        Text   = Color3.fromRGB(240, 240, 240),
+        Stroke = Color3.fromRGB(90, 90, 90),
+    }
+    if themeName == "Darker" then
+        colors.Accent = Color3.fromRGB(72, 138, 182); colors.Main = Color3.fromRGB(30, 30, 30); colors.Stroke = Color3.fromRGB(60, 60, 60)
+    elseif themeName == "Light" then
+        colors.Accent = Color3.fromRGB(0, 103, 192); colors.Main = Color3.fromRGB(200, 200, 200); colors.Text = Color3.fromRGB(0, 0, 0); colors.Stroke = Color3.fromRGB(120, 120, 120)
+    elseif themeName == "Aqua" then
+        colors.Accent = Color3.fromRGB(60, 165, 165); colors.Main = Color3.fromRGB(30, 60, 60)
+    elseif themeName == "Amethyst" then
+        colors.Accent = Color3.fromRGB(97, 62, 167); colors.Main = Color3.fromRGB(45, 30, 65)
+    elseif themeName == "Rose" then
+        colors.Accent = Color3.fromRGB(180, 55, 90); colors.Main = Color3.fromRGB(40, 40, 40)
+    end
+    return colors
+end
+
+function MobileControl:GetSafePosition(currentUDim2, currentSizeX, currentSizeY)
+    local vp = Camera.ViewportSize
+    if vp.X == 0 or vp.Y == 0 then return currentUDim2 end
+    local pixelX = (currentUDim2.X.Scale * vp.X) + currentUDim2.X.Offset
+    local pixelY = (currentUDim2.Y.Scale * vp.Y) + currentUDim2.Y.Offset
+    local TargetX = math.clamp(pixelX, 0, vp.X - currentSizeX)
+    local TargetY = math.clamp(pixelY, 0, vp.Y - currentSizeY)
+    return UDim2.new(TargetX / vp.X, 0, TargetY / vp.Y, 0)
+end
+
+function MobileControl:CreateButton(id, icon, defaultScalePos, callback)
+    if self.Buttons[id] and self.Buttons[id].Canvas then self.Buttons[id].Canvas:Destroy() end
+
+    local settings = ButtonSettings[id]
+    local sizePx   = settings.Size
+
+    local Canvas = Instance.new("CanvasGroup")
+    Canvas.Name     = id
+    Canvas.Size     = UDim2.fromOffset(sizePx, sizePx)
+    Canvas.Position = self:GetSafePosition(defaultScalePos, sizePx, sizePx)
+    Canvas.BackgroundTransparency = 1
+    Canvas.GroupTransparency = settings.Transp / 100
+    Canvas.Visible  = settings.Enabled
+    Canvas.Parent   = MobileScreenGui
+
+    local Rotator = Instance.new("Frame")
+    Rotator.Size            = UDim2.new(1, -6, 1, -6)
+    Rotator.AnchorPoint     = Vector2.new(0.5, 0.5)
+    Rotator.Position        = UDim2.new(0.5, 0, 0.5, 0)
+    Rotator.BorderSizePixel = 0
+    Rotator.BackgroundTransparency = 0.5
+    Rotator.Parent          = Canvas
+
+    local Stroke = Instance.new("UIStroke")
+    Stroke.Thickness = 2; Stroke.Parent = Rotator
+    Instance.new("UICorner", Rotator).CornerRadius = UDim.new(1, 0)
+
+    local IconImg = Instance.new("ImageLabel")
+    IconImg.Size       = UDim2.new(0.6, 0, 0.6, 0)
+    IconImg.AnchorPoint = Vector2.new(0.5, 0.5)
+    IconImg.Position   = UDim2.new(0.5, 0, 0.5, 0)
+    IconImg.BackgroundTransparency = 1
+    IconImg.Image      = icon
+    IconImg.ZIndex     = 5
+    IconImg.Parent     = Canvas
+
+    local LockOverlay = Instance.new("Frame")
+    LockOverlay.Size            = UDim2.new(1, -6, 1, -6)
+    LockOverlay.AnchorPoint     = Vector2.new(0.5, 0.5)
+    LockOverlay.Position        = UDim2.new(0.5, 0, 0.5, 0)
+    LockOverlay.BackgroundTransparency = 0.5
+    LockOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    LockOverlay.Visible         = false
+    LockOverlay.ZIndex          = 10
+    LockOverlay.Parent          = Canvas
+    local LockIcon = Instance.new("ImageLabel")
+    LockIcon.Size       = UDim2.new(0.5, 0, 0.5, 0)
+    LockIcon.AnchorPoint = Vector2.new(0.5, 0.5)
+    LockIcon.Position   = UDim2.new(0.5, 0, 0.5, 0)
+    LockIcon.BackgroundTransparency = 1
+    LockIcon.Image      = MOB_ICONS.Lock
+    LockIcon.ImageColor3 = Color3.new(1, 1, 1)
+    LockIcon.Parent     = LockOverlay
+    Instance.new("UICorner", LockOverlay).CornerRadius = UDim.new(1, 0)
+
+    local ClickHitbox = Instance.new("TextButton")
+    ClickHitbox.Size = UDim2.new(1, 0, 1, 0); ClickHitbox.BackgroundTransparency = 1
+    ClickHitbox.Text = ""; ClickHitbox.ZIndex = 20; ClickHitbox.Parent = Canvas
+
+    local DragHitbox = Instance.new("TextButton")
+    DragHitbox.Size     = UDim2.new(1.2, 0, 1.2, 0)
+    DragHitbox.Position = UDim2.new(-0.1, 0, -0.1, 0)
+    DragHitbox.BackgroundColor3 = Color3.fromRGB(255, 215, 0)
+    DragHitbox.BackgroundTransparency = 0.7
+    DragHitbox.Text    = "DRAG"
+    DragHitbox.Visible = self.EditMode
+    DragHitbox.ZIndex  = 30
+    DragHitbox.Parent  = Canvas
+    Instance.new("UICorner", DragHitbox).CornerRadius = UDim.new(1, 0)
+
+    local isActive = false
+    local isLocked = false
+
+    local function UpdateVisuals()
+        local Theme       = MobileControl:GetCurrentColors()
+        local targetColor  = isActive and Theme.Accent or Theme.Main
+        local targetStroke = isActive and Theme.Text or Theme.Stroke
+        local targetTransp = isActive and 0.2 or 0.5
+        local targetRot    = isActive and 45 or 0
+        local targetIconCol = Theme.Text
+        if id == "ART" or id == "Silver" then targetIconCol = Color3.new(1, 1, 1) end
+
+        TweenService:Create(Rotator, TweenInfo.new(0.3), {
+            BackgroundColor3       = targetColor,
+            BackgroundTransparency = targetTransp,
+            Rotation               = targetRot,
+        }):Play()
+        Stroke.Color      = targetStroke
+        IconImg.ImageColor3 = targetIconCol
+        LockOverlay.Visible = isLocked
+    end
+
+    ClickHitbox.MouseButton1Click:Connect(function()
+        if not self.EditMode and not isLocked and callback then callback() end
+    end)
+
+    local dragConn, endConn
+
+    DragHitbox.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if dragConn then dragConn:Disconnect(); dragConn = nil end
+            if endConn  then endConn:Disconnect();  endConn  = nil end
+
+            local dragStart = input.Position
+            local startPos  = Canvas.Position
+
+            dragConn = UserInputService.InputChanged:Connect(function(changeInput)
+                if changeInput.UserInputType == Enum.UserInputType.MouseMovement or changeInput.UserInputType == Enum.UserInputType.Touch then
+                    local delta  = changeInput.Position - dragStart
+                    local newPos = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+                    Canvas.Position = MobileControl:GetSafePosition(newPos, Canvas.AbsoluteSize.X, Canvas.AbsoluteSize.Y)
+                end
+            end)
+
+            endConn = UserInputService.InputEnded:Connect(function(endInput)
+                if endInput.UserInputType == Enum.UserInputType.MouseButton1 or endInput.UserInputType == Enum.UserInputType.Touch then
+                    if dragConn then dragConn:Disconnect(); dragConn = nil end
+                    if endConn  then endConn:Disconnect();  endConn  = nil end
+                    local s = Canvas.AbsoluteSize
+                    Canvas.Position = MobileControl:GetSafePosition(Canvas.Position, s.X, s.Y)
+                    MobileControl:SavePositions()
+                end
+            end)
+        end
+    end)
+
+    UpdateVisuals()
+
+    self.Buttons[id] = {
+        Canvas     = Canvas,
+        IconImg    = IconImg,
+        DragHitbox = DragHitbox,
+        Update     = UpdateVisuals,
+        SetState   = function(val) isActive = val; UpdateVisuals() end,
+        SetLocked  = function(val) isLocked = val; UpdateVisuals() end,
+        ApplySettings = function()
+            local s = ButtonSettings[id]
+            Canvas.Size = UDim2.fromOffset(s.Size, s.Size)
+            Canvas.GroupTransparency = s.Transp / 100
+            if id ~= "Menu" and id ~= "HideUI" then
+                Canvas.Visible = MobileControl.IsVisible and s.Enabled
+            else
+                Canvas.Visible = s.Enabled
+            end
+        end,
+    }
+end
+
+function MobileControl:UpdateAllThemes()
+    for _, btn in pairs(self.Buttons) do if btn.Update then btn.Update() end end
+end
+
+function MobileControl:SetEditMode(state)
+    self.EditMode = state
+    for _, btn in pairs(self.Buttons) do
+        if btn.DragHitbox then btn.DragHitbox.Visible = state end
+    end
+end
+
+function MobileControl:ToggleVisibility()
+    self.IsVisible = not self.IsVisible
+    for id, btn in pairs(self.Buttons) do
+        if id ~= "Menu" and id ~= "HideUI" then
+            btn.Canvas.Visible = self.IsVisible and ButtonSettings[id].Enabled
+        end
+    end
+    local eyeBtn = self.Buttons["HideUI"]
+    if eyeBtn then
+        eyeBtn.IconImg.Image = self.IsVisible and MOB_ICONS.EyeOpen or MOB_ICONS.EyeClose
+    end
+end
+
+function MobileControl:Lock(id, state)
+    if self.Buttons[id] then self.Buttons[id].SetLocked(state) end
+end
+
+local function UpdateBtnConfig(id)
+    if MobileControl.Buttons[id] then MobileControl.Buttons[id].ApplySettings() end
+end
+
+-- Create mobile buttons
+MobileControl:CreateButton("Menu",    MOB_ICONS.Menu,    GetSavedPos("Menu",     UDim2.new(0.9, 0, 0.4, 0)), function()
+    if Window then Window:Minimize() end
+end)
+MobileControl:CreateButton("HideUI",  MOB_ICONS.EyeOpen, GetSavedPos("HideUI",   UDim2.new(0.82, 0, 0.4, 0)), function() MobileControl:ToggleVisibility() end)
+MobileControl:CreateButton("Fly",     MOB_ICONS.Fly,     GetSavedPos("Fly",      UDim2.new(0.9, 0, 0.55, 0)), function() if Options.FlyTog   then Options.FlyTog:SetValue(not Options.FlyTog.Value) end end)
+MobileControl:CreateButton("Speed",   MOB_ICONS.Speed,   GetSavedPos("Speed",    UDim2.new(0.9, 0, 0.7, 0)),  function() if Options.SpeedTog then Options.SpeedTog:SetValue(not Options.SpeedTog.Value) end end)
+MobileControl:CreateButton("ART",     MOB_ICONS.ART,     GetSavedPos("ART",      UDim2.new(0.9, 0, 0.85, 0)), function() if Options.ARTTog   then Options.ARTTog:SetValue(not Options.ARTTog.Value) end end)
+MobileControl:CreateButton("Teleport",MOB_ICONS.TP,      GetSavedPos("Teleport", UDim2.new(0.82, 0, 0.85, 0)), function()
+    VirtualInputManager:SendKeyEvent(true,  GlobalState.TeleportBind or Enum.KeyCode.V, false, game)
+    task.wait(0.05)
+    VirtualInputManager:SendKeyEvent(false, GlobalState.TeleportBind or Enum.KeyCode.V, false, game)
+end)
+MobileControl:CreateButton("AH",      MOB_ICONS.AH,      GetSavedPos("AH",       UDim2.new(0.82, 0, 0.55, 0)), function() if Options.AHTog       then Options.AHTog:SetValue(not Options.AHTog.Value) end end)
+MobileControl:CreateButton("Anim",    MOB_ICONS.Anim,    GetSavedPos("Anim",     UDim2.new(0.82, 0, 0.7, 0)),  function() if Options.Anim_PlayTog then Options.Anim_PlayTog:SetValue(not Options.Anim_PlayTog.Value) end end)
+MobileControl:CreateButton("Silver",  MOB_ICONS.Silver,  GetSavedPos("Silver",   UDim2.new(0.74, 0, 0.85, 0)), function() if Options.SilverTog   then Options.SilverTog:SetValue(not Options.SilverTog.Value) end end)
+
+-- Sync function
+GlobalState.UpdateMobileBtn = function(id, state)
+    if MobileControl.Buttons[id] then MobileControl.Buttons[id].SetState(state) end
+end
+
+-- Mobile Tab UI
+TabMobile:AddToggle("Mob_Enable", {
+    Title   = "Show Mobile Overlay",
+    Default = true,
+    Callback = function(v)
+        MobileScreenGui.Enabled = v
+        GlobalConfig.ShowMobileBtn = v
+    end
+})
+
+TabMobile:AddToggle("Mob_Edit", {
+    Title    = "Edit Mode (Drag Buttons)",
+    Default  = false,
+    Callback = function(v) MobileControl:SetEditMode(v) end
+})
+
+local EdSection = TabMobile:AddSection("Button Editor")
+
+local function AddEditorControls(id, hasToggle)
+    EdSection:AddParagraph({ Title = id, Content = "" })
+    EdSection:AddSlider("Size_" .. id, {
+        Title = "Size (px)", Default = 50, Min = 1, Max = 100, Rounding = 0,
+        Callback = function(v) ButtonSettings[id].Size = v; UpdateBtnConfig(id) end
+    })
+    EdSection:AddSlider("Transp_" .. id, {
+        Title = "Transparency %", Default = 0, Min = 0, Max = 100, Rounding = 0,
+        Callback = function(v) ButtonSettings[id].Transp = v; UpdateBtnConfig(id) end
+    })
+    if hasToggle then
+        EdSection:AddToggle("Enable_" .. id, {
+            Title = "Button Present?", Default = true,
+            Callback = function(v) ButtonSettings[id].Enabled = v; UpdateBtnConfig(id) end
+        })
+    end
+end
+
+AddEditorControls("Menu",     false)
+AddEditorControls("HideUI",   true)
+AddEditorControls("Fly",      true)
+AddEditorControls("Speed",    true)
+AddEditorControls("ART",      true)
+AddEditorControls("Teleport", true)
+AddEditorControls("AH",       true)
+AddEditorControls("Anim",     true)
+AddEditorControls("Silver",   true)
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- UI: SETTINGS TAB
+-- ═════════════════════════════════════════════════════════════════════════
+local TabSettings = Tabs.Settings
+SaveManager:SetLibrary(Fluent)
+InterfaceManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+InterfaceManager:SetFolder("Doomsense")
+SaveManager:SetFolder("Doomsense/cfg")
+InterfaceManager:BuildInterfaceSection(TabSettings)
+SaveManager:BuildConfigSection(TabSettings)
+TabSettings:AddSection("Quick Save")
+TabSettings:AddButton({
+    Title = "Save / Overwrite Config",
+    Description = "Saves the currently selected or typed config",
+    Callback = function()
+        local cfgName = Options.SaveManager_ConfigList.Value
+        if not cfgName or cfgName == "" then
+            cfgName = Options.SaveManager_ConfigName.Value
+        end
+
+        if cfgName and cfgName:gsub(" ", "") ~= "" then
+            local success, err = SaveManager:Save(cfgName)
+            if success then
+                Fluent:Notify({ Title = "Config", Content = "Successfully saved: " .. cfgName, Duration = 3 })
+                SaveManager:RefreshConfigList()
+            else
+                Fluent:Notify({ Title = "Error", Content = "Failed to save: " .. tostring(err), Duration = 3 })
+            end
+        else
+            Fluent:Notify({ Title = "Config", Content = "Please select or type a config name first!", Duration = 3 })
+        end
+    end
+})
+TabSettings:AddButton({
+    Title = "REJOIN SERVER",
+    Description = "Rejoins the current server",
+    Callback = function()
+        if #Players:GetPlayers() <= 1 then
+            TeleportService:Teleport(game.PlaceId, LocalPlayer)
+        else
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, LocalPlayer)
+        end
+    end
+})
+-- ═════════════════════════════════════════════════════════════════════════
+-- LOGIC FUNCTIONS
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- ── Physics (every frame) ────────────────────────────────────────────────
+local function DoPhysics()
+    if GlobalConfig.AH.Enabled then return end
+
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChild("Humanoid")
+    if not root or not hum then return end
+
+    if GlobalConfig.IsFlying and BodyVel then
+        if not root:FindFirstChild("DoomVel") then
+            SetFeatureState("FlyTog", true)
+            return
+        end
+        local camCF = Camera.CFrame
+        local move  = Vector3.zero
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then move = move + camCF.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then move = move - camCF.LookVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then move = move - camCF.RightVector end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then move = move + camCF.RightVector end
+
+        if move.Magnitude > 0 then
+            BodyVel.Velocity = move.Unit * GlobalConfig.FlySpeed
+        else
+            BodyVel.Velocity = Vector3.new(0, 0.1, 0)
+        end
+        BodyGyro.CFrame = CFrame.new(root.Position, root.Position + camCF.LookVector)
+
+    elseif GlobalConfig.IsSpeeding and not GlobalConfig.IsFlying then
+        if hum.MoveDirection.Magnitude > 0 then
+            root.Velocity = Vector3.new(
+                hum.MoveDirection.X * GlobalConfig.WalkSpeed,
+                root.Velocity.Y,
+                hum.MoveDirection.Z * GlobalConfig.WalkSpeed
+            )
+        end
+    end
+end
+
+-- ── Silver Record (every frame) ──────────────────────────────────────────
+local function DoSilverRecord()
+    local S = GlobalState.Silver
+    if not S.IsRecording or S.IsRewinding then return end
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+
+    if not S.LastPos then
+        S.LastPos = root.Position
+        local p = CreateSilverPoint(root.CFrame, true)
+        table.insert(S.Points, p)
+        return
+    end
+
+    if (root.Position - S.LastPos).Magnitude >= S.MinDist then
+        S.LastPos = root.Position
+        local p = CreateSilverPoint(root.CFrame, false)
+        table.insert(S.Points, p)
+
+        if #S.Points > S.MaxPoints then
+            local startPoint  = S.Points[1]
+            local secondPoint = S.Points[2]
+            if startPoint and secondPoint then
+                startPoint.CFrame = secondPoint.CFrame
+                secondPoint:Destroy()
+                table.remove(S.Points, 2)
+            end
+        end
+    end
+end
+
+-- ── Auto Hunt (called at 20 tps accumulator) ────────────────────────────
+local function DoAutoHunt()
+    if not GlobalConfig.AH.Enabled then
+        UpdateAHVisual(nil)
+        return
+    end
+
+    local gs = GetGameState()
+    if gs ~= "ING" and gs ~= "80s" then
+        UpdateAHVisual(nil)
+        return
+    end
+
+    local target = GetBestTarget()
+    if target and LocalPlayer.Character then
+        local myRoot = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local tRoot  = target:FindFirstChild("HumanoidRootPart")
+
+        if myRoot and tRoot then
+            local tVel       = tRoot.Velocity
+            local predictPos = tRoot.Position + Vector3.new(tVel.X, 0, tVel.Z) * 0.15
+            local predictedCFrame = CFrame.lookAt(predictPos, predictPos + tRoot.CFrame.LookVector)
+            local targetCFrame    = predictedCFrame * CFrame.new(0, GlobalConfig.AH.Height, GlobalConfig.AH.Distance)
+
+            myRoot.CFrame   = targetCFrame
+            myRoot.Velocity = Vector3.zero
+
+            if tick() - GlobalState.AH.LastAttack >= GlobalConfig.AH.Delay then
+                GlobalState.AH.LastAttack = tick()
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 1)
+                task.wait(0.05)
+                VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 1)
+                local randKey = GlobalState.AH.Keys[math.random(1, #GlobalState.AH.Keys)]
+                local kCode   = Enum.KeyCode[randKey]
+                VirtualInputManager:SendKeyEvent(true, kCode, false, game)
+                task.delay(0.05, function()
+                    VirtualInputManager:SendKeyEvent(false, kCode, false, game)
+                end)
+            end
+
+            UpdateAHVisual(tRoot)
+        else
+            UpdateAHVisual(nil)
+        end
+    else
+        UpdateAHVisual(nil)
+    end
+end
+
+-- ── NoCDJump (called at 10 tps accumulator) ─────────────────────────────
+local function DoNoCDJump()
+    if not GlobalConfig.NoCDJump or not LocalPlayer.Character then return end
+    local hum = LocalPlayer.Character:FindFirstChild("Humanoid")
+    if hum then
+        hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
+        if not hum.Jump and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            hum.Jump = true
+        end
+    end
+end
+
+-- ── Visuals Render (called at 10 tps accumulator) ───────────────────────
+local function DoVisualsRender()
+    -- Cleanup caches
+    for m, hl in pairs(GlobalState.Vis.HighlightCache) do
+        if not m.Parent then hl:Destroy(); GlobalState.Vis.HighlightCache[m] = nil end
+    end
+    for m, tags in pairs(GlobalState.Vis.TagCache) do
+        if not m.Parent then
+            tags.TopGui:Destroy(); tags.BotGui:Destroy()
+            GlobalState.Vis.TagCache[m] = nil
+        end
+    end
+
+    -- Night Mode
+    if Cfg.Night.Enabled then
+        Lighting.TimeOfDay      = "00:00:00"
+        Lighting.Ambient        = Cfg.Night.AmbCol
+        Lighting.OutdoorAmbient = Cfg.Night.lightCol
+    end
+
+    local PlayersFolder = Workspace:FindFirstChild("Players")
+
+    for _, p in pairs(Players:GetPlayers()) do
+        local char = p.Character
+        if char then
+            if p == LocalPlayer then
+                local hl = GetHighlight(char)
+                if Cfg.Local.Enabled then
+                    hl.Enabled = true; hl.Adornee = char
+                    hl.FillColor    = Cfg.Local.FillCol; hl.OutlineColor = Cfg.Local.OutCol
+                    hl.FillTransparency    = GetTrans(Cfg.Local.Limp_Fill, Cfg.Local.Style["Fill"])
+                    hl.OutlineTransparency = GetTrans(Cfg.Local.Limp_Out, Cfg.Local.Style["Outline"])
+                else
+                    hl.Enabled = false
+                end
+            else
+                local isInPlayersFolder = (PlayersFolder and char.Parent == PlayersFolder)
+                if not isInPlayersFolder then
+                    if GlobalState.Vis.HighlightCache[char] then GlobalState.Vis.HighlightCache[char].Enabled = false end
+                    if GlobalState.Vis.TagCache[char] then
+                        GlobalState.Vis.TagCache[char].TopGui.Enabled = false
+                        GlobalState.Vis.TagCache[char].BotGui.Enabled = false
+                    end
+                else
+                    local isExe = IsGameEXE(char)
+                    local hl    = GetHighlight(char)
+                    local tData = GetTags(char)
+                    local head  = char:FindFirstChild("Head") or char.PrimaryPart
+                    local root  = char:FindFirstChild("HumanoidRootPart")
+
+                    -- Chams
+                    local isEnabled = isExe and Cfg.Chams.EXE_Enabled or (not isExe and Cfg.Chams.Surv_Enabled)
+                    if isEnabled then
+                        hl.Enabled = true; hl.Adornee = char
+                        local showFill = isExe and Cfg.Chams.EXE_Style["Fill"] or Cfg.Chams.Surv_Style["Fill"]
+                        local showOut  = isExe and Cfg.Chams.EXE_Style["Outline"] or Cfg.Chams.Surv_Style["Outline"]
+                        if isExe then
+                            hl.FillColor = Cfg.Chams.EXE_FillCol; hl.OutlineColor = Cfg.Chams.EXE_OutCol
+                            hl.FillTransparency    = GetTrans(Cfg.Chams.EXE_Limp_Fill, showFill)
+                            hl.OutlineTransparency = GetTrans(Cfg.Chams.EXE_Limp_Out, showOut)
+                        else
+                            hl.FillColor = Cfg.Chams.Surv_FillCol; hl.OutlineColor = Cfg.Chams.Surv_OutCol
+                            hl.FillTransparency    = GetTrans(Cfg.Chams.Surv_Limp_Fill, showFill)
+                            hl.OutlineTransparency = GetTrans(Cfg.Chams.Surv_Limp_Out, showOut)
+                        end
+                    else
+                        hl.Enabled = false
+                    end
+
+                    -- Distance config
+                    local distEnabled, distCfg = false, nil
+                    if isExe then
+                        distEnabled = Cfg.Distance.EXE_Enabled
+                        distCfg = { Out = Cfg.Distance.EXE_OutCol, Fill = Cfg.Distance.EXE_FillCol, Limp = Cfg.Distance.EXE_Limp }
+                    else
+                        distEnabled = Cfg.Distance.Surv_Enabled
+                        distCfg = { Out = Cfg.Distance.Surv_OutCol, Fill = Cfg.Distance.Surv_FillCol, Limp = Cfg.Distance.Surv_Limp }
+                    end
+
+                    -- Top tag (Role/Rage)
+                    if Cfg.TwoD.Enabled and isExe and head then
+                        tData.TopGui.Enabled = true; tData.TopGui.Adornee = head
+                        local gT = GetTrans(Cfg.TwoD.GlobalLimp, true)
+                        tData.TopLbl.TextTransparency       = gT
+                        tData.TopLbl.TextStrokeTransparency = gT
+                        if IsRageCheck(char) then
+                            tData.TopLbl.Text             = "RAGE"
+                            tData.TopLbl.TextColor3       = Cfg.TwoD.RageFill
+                            tData.TopLbl.TextStrokeColor3 = Cfg.TwoD.RageOut
+                        else
+                            tData.TopLbl.Text             = "EXE"
+                            tData.TopLbl.TextColor3       = Cfg.TwoD.FillCol
+                            tData.TopLbl.TextStrokeColor3 = Cfg.TwoD.OutCol
+                        end
+                    else
+                        tData.TopGui.Enabled = false
+                    end
+
+                    -- Bottom tag (Distance)
+                    if distEnabled and root then
+                        tData.BotGui.Enabled = true; tData.BotGui.Adornee = root
+                        local distStuds  = (Camera.CFrame.Position - root.Position).Magnitude
+                        local distMeters = math.floor(distStuds / 3.57)
+                        local dT = GetTrans(distCfg.Limp, true)
+                        tData.BotLbl.Text             = tostring(distMeters) .. "m"
+                        tData.BotLbl.TextColor3       = distCfg.Fill
+                        tData.BotLbl.TextStrokeColor3 = distCfg.Out
+                        tData.BotLbl.TextTransparency       = dT
+                        tData.BotLbl.TextStrokeTransparency = dT
+                    else
+                        tData.BotGui.Enabled = false
+                    end
+                end
+            end
+        end
+    end
+
+    -- Pad render
+    if Cfg.Pad.Enabled then
+        for obj, hl in pairs(GlobalState.Vis.PadCache) do
+            if obj.Parent then
+                if not hl.Enabled then hl.Enabled = true end
+                hl.FillColor    = Cfg.Pad.FillCol
+                hl.OutlineColor = Cfg.Pad.OutCol
+                hl.FillTransparency    = GetTrans(Cfg.Pad.Limp_Fill, Cfg.Pad.Style["Fill"])
+                hl.OutlineTransparency = GetTrans(Cfg.Pad.Limp_Out, Cfg.Pad.Style["Outline"])
+            else
+                hl:Destroy(); GlobalState.Vis.PadCache[obj] = nil
+            end
+        end
+    else
+        for _, hl in pairs(GlobalState.Vis.PadCache) do hl.Enabled = false end
+    end
+end
+
+-- ── LMS Audio (called at 20 tps accumulator) ────────────────────────────
+local function DoLMSAudio()
+    local L = GlobalState.LMS
+    local currentState = GetGameState()
+    local folder = FindSoloFolder()
+    local shadow = GetShadowSound()
+
+    if currentState == "ING" or currentState == "80s" then
+        if L.StopRoutineRunning then L.StopRoutineRunning = false end
+
+        -- Scan players for DOD
+        if not L.VisualPlayed then
+            local survs, killers = {}, {}
+            for _, p in pairs(Players:GetPlayers()) do
+                if p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    if IsGameEXE(p.Character) then table.insert(killers, p) else table.insert(survs, p) end
+                end
+            end
+            if #killers > 0 then L.Killer   = killers[1] end
+            if #survs   > 0 then L.Survivor = survs[1] end
+        end
+
+        -- Music sync
+        local original = nil
+        if folder then
+            for _, s in pairs(folder:GetChildren()) do
+                if s:IsA("Sound") and LMS_Originals_Lookup[s.Name] and (s.Playing or s.Volume > 0) then
+                    original = s; break
+                end
+            end
+        end
+
+        if original then
+            if GlobalConfig.LMS.Enabled then
+                L.IsCapturing = true
+
+                if not L.VisualPlayed and GlobalConfig.LMS.StartEffect ~= "None" and LMS_Visuals[GlobalConfig.LMS.StartEffect] and original.Playing and original.TimePosition > 0.1 then
+                    L.VisualPlayed = true
+                    task.spawn(LMS_Visuals[GlobalConfig.LMS.StartEffect])
+                    Fluent:Notify({ Title = "LMS", Content = "Custom Track Active", Duration = 2 })
+                end
+
+                if original.Volume > 0 then original.Volume = 0 end
+
+                if L.CurrentAssetID then
+                    if shadow.SoundId ~= L.CurrentAssetID then
+                        shadow.SoundId      = L.CurrentAssetID
+                        shadow.TimePosition = original.TimePosition
+                        shadow:Play()
+                    end
+                    if not shadow.Playing then shadow:Play() end
+                    local diff = math.abs(shadow.TimePosition - original.TimePosition)
+                    if diff > 0.1 then shadow.TimePosition = original.TimePosition end
+                    if shadow.PlaybackSpeed ~= original.PlaybackSpeed then shadow.PlaybackSpeed = original.PlaybackSpeed end
+                    shadow.Volume = GlobalConfig.LMS.Volume
+                end
+            else
+                L.IsCapturing  = false
+                L.VisualPlayed = false
+                if shadow.Playing then shadow:Stop() end
+                shadow.Volume  = 0
+                original.Volume = GlobalConfig.LMS.Volume
+            end
+        else
+            if shadow.Playing then shadow:Pause() end
+        end
+    else
+        L.VisualPlayed = false
+        if L.IsCapturing then TriggerSteppedStop(shadow) end
+    end
+end
+
+-- ── ART Logic (called every 0.5s in SlowTick) ──────────────────────────
+local function DoART()
+    local A = GlobalState.ART
+    local currentState = GetGameState()
+
+    if currentState == "INT" or currentState == "SEC" or currentState == "MS" then
+        A.HandledThisRound = false
+    end
+
+    if not GlobalConfig.AutoRing or A.HandledThisRound then return end
+
+    if currentState == "ING" or currentState == "80s" then
+        local timeVal = Workspace:FindFirstChild("GameProperties") and Workspace.GameProperties:FindFirstChild("Time")
+        local isTimeCondition = (timeVal and timeVal.Value <= 80 and timeVal.Value > 0)
+        local isStateCondition = (currentState == "80s")
+
+        if isStateCondition or isTimeCondition then
+            local char = LocalPlayer.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local hum  = char and char:FindFirstChild("Humanoid")
+
+            if root and hum and hum.Health > 0 then
+                local targetCF  = nil
+                local foundType = ""
+
+                for _, v in pairs(Workspace:GetDescendants()) do
+                    if v:IsA("MeshPart") and v.MeshId == "rbxassetid://106058960373684" then
+                        targetCF  = v.CFrame + Vector3.new(0, 3, 0)
+                        foundType = "Ring"
+                        break
+                    elseif v:IsA("BasePart") and (v.Name == "2EscapePart" or v.Name == "1EscapePart" or v.Name == "EscapePart") then
+                        targetCF  = v.CFrame + Vector3.new(0, 3, 0)
+                        foundType = "Exit Zone"
+                    end
+                end
+
+                if targetCF then
+                    root.Velocity = Vector3.zero
+                    root.CFrame   = targetCF
+                    A.HandledThisRound = true
+                    Fluent:Notify({ Title = "ART Triggered", Content = "Successfully teleported to: " .. foundType, Duration = 4 })
+                end
+            end
+        end
+    end
+end
+
+-- ── Auto Vote State Machine (called every 0.5s) ────────────────────────
+local function DoAutoVote()
+    local V = GlobalState.Vote
+    local gs = GetGameState()
+
+    if gs == "INT" or gs == "RE" then
+        V.VotedInRound = false
+        V.Timer = 0
+        return
+    end
+
+    if not GlobalConfig.Vote.Enabled or V.VotedInRound or gs ~= "SEC" then 
+        return 
+    end
+
+    V.Timer = V.Timer + 0.5
+    
+    local targetDelay = tonumber(GlobalConfig.Vote.Delay) or 1
+    
+    if V.Timer >= targetDelay then
+        local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+        local voteRemote = remotes and remotes:FindFirstChild("Voted")
+        
+        if voteRemote then
+            local survChar = GlobalConfig.Vote.Randomize and VoteLists.Survivor[math.random(1, #VoteLists.Survivor)] or GlobalConfig.Vote.SurvTarget
+            local exeChar = GlobalConfig.Vote.Randomize and VoteLists.EXE[math.random(1, #VoteLists.EXE)] or GlobalConfig.Vote.ExeTarget
+            
+            voteRemote:FireServer(survChar)
+            voteRemote:FireServer(exeChar)
+            
+            Fluent:Notify({ Title = "Auto Vote", Content = "Voted: " .. survChar .. " & " .. exeChar, Duration = 3 })
+        end
+        
+        V.VotedInRound = true
+    end
+end
+
+-- ── Pad Scanner (called every 0.5s) ─────────────────────────────────────
+local function DoPadScan()
+    local SV = GlobalState.Vis
+
+    local GameProps  = Workspace:FindFirstChild("GameProperties")
+    local StateValue = GameProps and GameProps:FindFirstChild("State")
+    if not StateValue then return end
+
+    local currentState = StateValue.Value
+
+    if currentState == "RE" or currentState == "INT" or currentState == "MS" then
+        if SV.HasScannedPads then
+            SV.HasScannedPads = false
+            for obj, hl in pairs(SV.PadCache) do if hl then hl:Destroy() end end
+            table.clear(SV.PadCache)
+        end
+    elseif currentState == "ING" then
+        if not Cfg.Pad.Enabled then return end
+        if not SV.HasScannedPads then
+            SV.HasScannedPads = true
+            task.wait(2)
+            if not Cfg.Pad.Enabled or not GlobalState.ScriptActive then return end
+            local maps = Workspace:FindFirstChild("Maps") or Workspace:FindFirstChild("Map")
+            if maps then
+                for _, obj in pairs(maps:GetDescendants()) do
+                    if obj.Name == "Pad" and obj:IsA("BasePart") then
+                        if not SV.PadCache[obj] then
+                            local hl = Instance.new("Highlight")
+                            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                            hl.Parent    = Visuals_Folder
+                            hl.Adornee   = obj
+                            SV.PadCache[obj] = hl
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ── Ping Check (called every ~1s via counter) ───────────────────────────
+local function DoPingCheck()
+    local success, ping = pcall(function()
+        return StatsService.Network.ServerStatsItem["Data Ping"]:GetValue()
+    end)
+    if success then GlobalState.CurrentPing = math.floor(ping) end
+end
+
+-- ── AH Character Refresh (called every ~2s via counter) ─────────────────
+local function DoAHCharRefresh()
+    if not GlobalConfig.AH.Enabled or not GlobalConfig.AH.ManualTarget then return end
+    local list = { "None" }
+    local seen = {}
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local n = p.Character:GetAttribute("Character") or p.Character.Name
+            local h = p.Character:FindFirstChild("Humanoid")
+            if not IsGameEXE(p.Character) and h and h.Health > 0 and not seen[n] then
+                table.insert(list, n)
+                seen[n] = true
+            end
+        end
+    end
+    table.sort(list)
+    if Options.AHCharSelect then
+        Options.AHCharSelect:SetValues(list)
+        if not table.find(list, GlobalConfig.AH.TargetChar) then Options.AHCharSelect:SetValue("None") end
+    end
+end
+
+-- ── Animation Auto Detect (called every ~1s via counter) ────────────────
+local function DoAnimDetect()
+    if not GlobalConfig.Anim.AutoDetect or not LocalPlayer.Character then return end
+    local charName  = LocalPlayer.Character:GetAttribute("Character") or LocalPlayer.Character.Name
+    local searchKey = NameToKey[charName] or charName
+    local dbKey     = nil
+    if AnimDB[searchKey] then dbKey = searchKey end
+
+    if dbKey and dbKey ~= NameToKey[GlobalConfig.Anim.CurrentChar] and dbKey ~= GlobalConfig.Anim.CurrentChar then
+        if Options.Anim_Char then
+            for _, k in pairs(CharList) do
+                if NameToKey[k] == dbKey or k == dbKey then
+                    Options.Anim_Char:SetValue(k)
+                    GlobalConfig.Anim.CurrentChar = k
+                    
+                    local list = {}
+                    if AnimDB[dbKey] then
+                        for _, a in pairs(AnimDB[dbKey]) do table.insert(list, a.Name) end
+                    end
+                    
+                    if Options.Anim_Name and #list > 0 then
+                        Options.Anim_Name:SetValues(list)
+                        Options.Anim_Name:SetValue(list[1])
+                        GlobalConfig.Anim.CurrentName = list[1]
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- ── Mobile Viewport Check (called every 0.5s) ──────────────────────────
+local LastViewportCache = Camera.ViewportSize
+local function DoViewportCheck()
+    local currentVP = Camera.ViewportSize
+    if currentVP ~= LastViewportCache and currentVP.X > 0 and currentVP.Y > 0 then
+        LastViewportCache = currentVP
+        for _, btn in pairs(MobileControl.Buttons) do
+            if btn.Canvas and btn.Canvas.Parent then
+                local size = btn.Canvas.AbsoluteSize
+                if size.X > 0 and size.Y > 0 then
+                    btn.Canvas.Position = MobileControl:GetSafePosition(btn.Canvas.Position, size.X, size.Y)
+                end
+            end
+        end
+    end
+end
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- FAST TICK
+-- ═════════════════════════════════════════════════════════════════════════
+
+local FastTimers = { AH = 0, Visuals = 0, LMS = 0, NoCDJump = 0 }
+
+RunService.Heartbeat:Connect(function(dt)
+    if not GlobalState.ScriptActive then return end
+
+    -- Physics — every frame
+    DoPhysics()
+
+    -- Silver Recording — every frame
+    DoSilverRecord()
+
+    -- NoCDJump — 10 tps (0.1s)
+    FastTimers.NoCDJump = FastTimers.NoCDJump + dt
+    if FastTimers.NoCDJump >= 0.1 then
+        FastTimers.NoCDJump = 0
+        DoNoCDJump()
+    end
+
+    -- Auto Hunt — 20 tps (0.05s)
+    FastTimers.AH = FastTimers.AH + dt
+    if FastTimers.AH >= 0.05 then
+        FastTimers.AH = 0
+        DoAutoHunt()
+    end
+
+    -- Visuals Render — 10 tps (0.1s)
+    FastTimers.Visuals = FastTimers.Visuals + dt
+    if FastTimers.Visuals >= 0.1 then
+        FastTimers.Visuals = 0
+        DoVisualsRender()
+    end
+
+    -- LMS Audio — 20 tps (0.05s)
+    FastTimers.LMS = FastTimers.LMS + dt
+    if FastTimers.LMS >= 0.05 then
+        FastTimers.LMS = 0
+        DoLMSAudio()
+    end
+end)
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- SLOW TICK
+-- ═════════════════════════════════════════════════════════════════════════
+
+task.spawn(function()
+    local counters = { Ping = 0, AHRefresh = 0, AnimDetect = 0 }
+
+    while GlobalState.ScriptActive do
+        task.wait(0.5)
+        counters.Ping       = counters.Ping + 1
+        counters.AHRefresh  = counters.AHRefresh + 1
+        counters.AnimDetect = counters.AnimDetect + 1
+
+        -- Every 0.5s
+        DoART()
+        DoAutoVote()
+        DoPadScan()
+        DoViewportCheck()
+
+        -- Every ~1s
+        if counters.Ping >= 2 then
+            counters.Ping = 0
+            DoPingCheck()
+        end
+
+        -- Every ~2s
+        if counters.AHRefresh >= 4 then
+            counters.AHRefresh = 0
+            DoAHCharRefresh()
+        end
+
+        -- Every ~1s
+        if counters.AnimDetect >= 2 then
+            counters.AnimDetect = 0
+            DoAnimDetect()
+        end
+    end
+end)
+
+-- ═════════════════════════════════════════════════════════════════════════
+-- FINAL INITIALIZATION
+-- ═════════════════════════════════════════════════════════════════════════
+
+-- Mobile initial scale pass
+task.spawn(function()
+    task.wait(0.5)
+    MobileControl:UpdateAllThemes()
+    local vp = Camera.ViewportSize
+    if vp.X > 0 and vp.Y > 0 then
+        for _, btn in pairs(MobileControl.Buttons) do
+            if btn.Canvas then
+                local s = btn.Canvas.AbsoluteSize
+                btn.Canvas.Position = MobileControl:GetSafePosition(btn.Canvas.Position, s.X, s.Y)
+            end
+        end
+    end
+end)
+
+-- Animation dropdown init
+task.delay(1, function()
+    if Options.Anim_Char and Options.Anim_Name then
+        local list   = {}
+        local defKey = "R6"
+        if AnimDB[defKey] then
+            for _, a in pairs(AnimDB[defKey]) do table.insert(list, a.Name) end
+        end
+        pcall(function()
+            Options.Anim_Name:SetValues(list)
+            if #list > 0 then Options.Anim_Name:SetValue(list[1]) end
+        end)
+    end
+end)
+
+-- Select first tab & notify
+Window:SelectTab(1)
+
+Fluent:Notify({
+    Title    = "DOOMSENSE V2.1",
+    Content  = "Fluent — Loaded.",
+    Duration = 5
+})
+
+-- Auto-load saved config
+task.delay(1, function()
+    if SaveManager.LoadAutoloadConfig then
+        SaveManager:LoadAutoloadConfig()
+    end
+end)
+
+-- Cleanup listeners
+CoreGui.ChildRemoved:Connect(function(child)
+    if child == MobileScreenGui then end
+    if child.Name == "ScreenGui" then
+        if Visuals_Folder then Visuals_Folder:Destroy() end
+        if FX_Gui then FX_Gui:Destroy() end
+    end
+end)
+
+print("DOOMSENSE V2.1: Fluent — All Systems Online.")
