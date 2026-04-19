@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- DOOMSENSE V2.1 — By R3cup/doomsenseteam
+-- DOOMSENSE V2.2 — By R3cup/doomsenseteam
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- ── SERVICES ─────────────────────────────────────────────────────────────
@@ -69,6 +69,7 @@ local GlobalConfig = {
         Track        = "None",
         StartEffect  = "None",
         EffectVolume = 1,
+        LoopTrack    = true
     },
 
     -- Animation
@@ -133,6 +134,9 @@ local GlobalState = {
         CachedFolder      = nil,
         Survivor          = nil,
         Killer            = nil,
+        RoundActive       = false,
+        InitGraceTimer    = 0,
+        TrackFinished     = false
     },
 
     -- Visuals runtime
@@ -140,6 +144,7 @@ local GlobalState = {
         PadCache       = {},
         HighlightCache = {},
         TagCache       = {},
+        TrapCache      = {},
         HasScannedPads = false,
     },
 
@@ -172,13 +177,10 @@ end
 
 local VoteLists = {
     EXE = {
-        "TailsDoll", "Kolossos", "2011x", "Fleetway", "Furnace",
-        "Lord X", "bear5", "Tripwire", "chara", "v1",
-        "2017x", "sonico", "steve", "LegacyFurnace"
+        "TailsDoll", "Kolossos", "2011x", "Fleetway" -- (remove the "--" to add), "Furnace", "bear5", "Tripwire", "chara", "v1", "2017x", "sonico", "steve", "LegacyFurnace"
     },
     Survivor = {
-        "Tails", "Sonic", "Silver", "Blaze", "Cream",
-        "MetalSonic", "Eggman", "Knuckles", "Amy"
+        "Tails", "Sonic", "Silver", "Blaze", "Cream", "MetalSonic", "Eggman", "Knuckles", "Amy" -- (remove the "--" to add), "Shadow", "SuperSonic"
     }
 }
 
@@ -231,7 +233,7 @@ end)
 -- ── UI: WINDOW & TABS ───────────────────────────────────────────────────
 
 local Window = Fluent:CreateWindow({
-    Title       = "DOOMSENSE V2.1",
+    Title       = "DOOMSENSE V2.2",
     SubTitle    = "Fluent"  .. Fluent.Version,
     TabWidth    = 160,
     Size        = UDim2.fromOffset(580, 460),
@@ -800,69 +802,72 @@ local AnimDB = {
     ["R6"] = {
         { Name = "Dance 1", Id = "182435998",  SoundId = "0" },
         { Name = "Dance 2", Id = "182436842",  SoundId = "0" },
-        { Name = "Dance 3", Id = "182436935",  SoundId = "0" },
-    },
+        { Name = "Dance 3", Id = "182436935",  SoundId = "0" }
+        },
     ["Sonic"] = {
-        { Name = "Baby Dance",  Id = "79203936383675",  SoundId = "90901236525070" },
-        { Name = "Relaxing",    Id = "104062552147146", SoundId = "96306683591059" },
-        { Name = "Waiting",     Id = "132709141019647", SoundId = "129956345965154" },
-        { Name = "Shonic",      Id = "124702409687881", SoundId = "119556420416832" },
-        { Name = "Medicine",    Id = "86397585701161",  SoundId = "81957643358938" },
-        { Name = "Paced",       Id = "117900173410005", SoundId = "78655470001151" },
-        { Name = "Impatience",  Id = "87992356942409",  SoundId = "2111554497" },
-        { Name = "TickTock",    Id = "95107785706455",  SoundId = "73526950119661" },
-        { Name = "PBJ",         Id = "113910526539334", SoundId = "119249777974685" },
-        { Name = "Ring Walk",   Id = "123377580352862", SoundId = "83964029063021" },
-        { Name = "Pipebomb 2",  Id = "130034868708651", SoundId = "119640578709774" },
-        { Name = "Diaries",     Id = "92897830029002",  SoundId = "76173803344707" },
+        { Name = "Baby Dance",   Id = "79203936383675",  SoundId = "90901236525070" },
+        { Name = "Relaxing",     Id = "104062552147146", SoundId = "96306683591059" },
+        { Name = "Waiting",      Id = "132709141019647", SoundId = "129956345965154" },
+        { Name = "Shonic",       Id = "124702409687881", SoundId = "119556420416832" },
+        { Name = "Medicine",     Id = "86397585701161",  SoundId = "81957643358938" },
+        { Name = "Paced",        Id = "117900173410005", SoundId = "78655470001151" },
+        { Name = "Do It",        Id = "115044322367992", SoundId = "138820000124792" },
+        { Name = "Impatience",   Id = "87992356942409",  SoundId = "2111554497" },
+        { Name = "TickTock 1",   Id = "93800356049298",  SoundId = "117144052716723" },
+        { Name = "PBJ",          Id = "113910526539334", SoundId = "119249777974685" },
+        { Name = "Ring Walk",    Id = "123377580352862", SoundId = "83964029063021" },
+        { Name = "Pipebomb 2",   Id = "130034868708651", SoundId = "119640578709774" },
+        { Name = "TickTock 2",   Id = "95107785706455",  SoundId = "73526950119661" },
+        { Name = "Diaries",      Id = "92897830029002",  SoundId = "76173803344707" },
     },
     ["Tails"] = {
-        { Name = "Rat Dance",   Id = "73313302543888",  SoundId = "105826132589844" },
-        { Name = "Sit",         Id = "132926716277265", SoundId = "139085759707240" },
-        { Name = "Cory",        Id = "118810363050448", SoundId = "128210514182301" },
-        { Name = "Pipebomb",    Id = "137946742808216", SoundId = "119640578709774" },
-        { Name = "Helicopter",  Id = "89515158858178",  SoundId = "137931208091292" },
-        { Name = "Who",         Id = "84541229170186",  SoundId = "83086967155682" },
-        { Name = "Horse",       Id = "93036777474390",  SoundId = "1842306536" },
-        { Name = "Goodbye",     Id = "96963375850749",  SoundId = "83964029063021" },
+        { Name = "Rat Dance",    Id = "73313302543888",  SoundId = "105826132589844" },
+        { Name = "Sit",          Id = "132926716277265", SoundId = "139085759707240" },
+        { Name = "Cory",         Id = "118810363050448", SoundId = "128210514182301" },
+        { Name = "Pipebomb",     Id = "137946742808216", SoundId = "119640578709774" },
+        { Name = "Helicopter",   Id = "89515158858178",  SoundId = "137931208091292" },
+        { Name = "Who",          Id = "84541229170186",  SoundId = "83086967155682" },
+        { Name = "Horse",        Id = "93036777474390",  SoundId = "1842306536" },
+        { Name = "Goodbye",      Id = "96963375850749",  SoundId = "83964029063021" },
     },
     ["Knuckles"] = {
-        { Name = "Stephanie",      Id = "140682945610579", SoundId = "91940041220689" },
-        { Name = "ChillOut",       Id = "96036373262427",  SoundId = "89185337796161" },
-        { Name = "Aura",           Id = "97453636614232",  SoundId = "89185337796161" },
-        { Name = "Sitting",        Id = "79209172925447",  SoundId = "0" },
-        { Name = "Do That Thing",  Id = "78791270212133",  SoundId = "112624207180199" },
-        { Name = "Hit Every Beat", Id = "80597715589852",  SoundId = "120207366318005" },
-        { Name = "Fallen Kingdom", Id = "108656705089262", SoundId = "111893253196198" },
+        { Name = "Stephanie",    Id = "140682945610579", SoundId = "91940041220689" },
+        { Name = "ChillOut",     Id = "96036373262427",  SoundId = "89185337796161" },
+        { Name = "Aura",         Id = "97453636614232",  SoundId = "89185337796161" },
+        { Name = "Sitting",      Id = "79209172925447",  SoundId = "0" },
+        { Name = "Do That Thing",Id = "78791270212133",  SoundId = "112624207180199" },
+        { Name = "Hit Every Beat",Id= "80597715589852",  SoundId = "120207366318005" },
+        { Name = "Fallen Kingdom",Id= "108656705089262", SoundId = "111893253196198" },
     },
     ["Amy"] = {
         { Name = "Surprised",       Id = "95622465731556",  SoundId = "128251124090446" },
         { Name = "Headbang",        Id = "113537674050921", SoundId = "135336648388670" },
-        { Name = "Dance of Justice", Id = "97841662978305", SoundId = "71722262464105" },
+        { Name = "Dance of Justice",Id = "97841662978305", SoundId = "71722262464105" },
         { Name = "Smiley",          Id = "83086430858295",  SoundId = "114050562679490" },
         { Name = "Doodle",          Id = "107060462123341", SoundId = "99088950437194" },
         { Name = "Static",          Id = "91094123750588",  SoundId = "130488583055563" },
         { Name = "Love N Cavity",   Id = "76749834700097",  SoundId = "95398124962437" },
         { Name = "Noodle",          Id = "111017557755415", SoundId = "127331265842362" },
         { Name = "Eek!",            Id = "83310660894486",  SoundId = "118187270515767" },
+        { Name = "Caramel",         Id = "135111770950723", SoundId = "110835760370936" },
     },
     ["Cream"] = {
-        { Name = "Overdrive", Id = "126157584199051", SoundId = "78649217959001" },
-        { Name = "Cat Swing", Id = "119996423025347", SoundId = "97335273261339" },
-        { Name = "Jevil Hop", Id = "137069582420732", SoundId = "110723101893449" },
-        { Name = "Penguin",   Id = "136126837988845", SoundId = "76378854930188" },
-        { Name = "Waving",    Id = "101475077691415", SoundId = "88033678198864" },
-        { Name = "Griddy",    Id = "88275250559180",  SoundId = "77501488098123" },
+        { Name = "Overdrive",    Id = "126157584199051", SoundId = "78649217959001" },
+        { Name = "Cat Swing",    Id = "119996423025347", SoundId = "97335273261339" },
+        { Name = "Jevil Hop",    Id = "137069582420732", SoundId = "110723101893449" },
+        { Name = "Penguin",      Id = "136126837988845", SoundId = "76378854930188" },
+        { Name = "Waving",       Id = "101475077691415", SoundId = "88033678198864" },
+        { Name = "Griddy",       Id = "88275250559180",  SoundId = "77501488098123" },
     },
     ["Eggman"] = {
-        { Name = "Egg Rolled",  Id = "109633747241470", SoundId = "77202079956843" },
-        { Name = "Sturdy",      Id = "123633884307468", SoundId = "78459140178909" },
-        { Name = "Boohoo",      Id = "118361359360130", SoundId = "0" },
-        { Name = "Master Plan", Id = "135726076356843", SoundId = "81715060320729" },
-        { Name = "Why Post",    Id = "75695304745148",  SoundId = "81715060320729" },
-        { Name = "Eggly",       Id = "125599236186100", SoundId = "104056772578784" },
-        { Name = "Bird Word",   Id = "126886074967700", SoundId = "75327454531443" },
-        { Name = "Forklift",    Id = "127435576488001", SoundId = "0" },
+        { Name = "Egg Rolled",   Id = "109633747241470", SoundId = "77202079956843" },
+        { Name = "Sturdy",       Id = "123633884307468", SoundId = "78459140178909" },
+        { Name = "Boohoo",       Id = "118361359360130", SoundId = "0" },
+        { Name = "Master Plan",  Id = "135726076356843", SoundId = "81715060320729" },
+        { Name = "Why Post",     Id = "75695304745148",  SoundId = "81715060320729" },
+        { Name = "Eggly",        Id = "125599236186100", SoundId = "104056772578784" },
+        { Name = "Bird Word",    Id = "126886074967700", SoundId = "75327454531443" },
+        { Name = "Forklift",     Id = "127435576488001", SoundId = "0" },
     },
     ["Silver"] = {
         { Name = "Baby Dance",     Id = "79203936383675",  SoundId = "90901236525070" },
@@ -880,9 +885,6 @@ local AnimDB = {
         { Name = "Lonely",       Id = "116357078780443", SoundId = "77269072383403" },
         { Name = "Thinking",     Id = "116585917682409", SoundId = "9043366464" },
         { Name = "Come Closer",  Id = "76249045959187",  SoundId = "131169447699141" },
-    },
-    ["Shadow"] = {
-        { Name = "Baby Dance", Id = "79203936383675", SoundId = "90901236525070" },
     },
     ["2011X"] = {
         { Name = "Maria Carey", Id = "92888638699962",  SoundId = "112568013507036" },
@@ -914,8 +916,6 @@ local NameToKey = {
     ["MetalSonic"]   = "Metal Sonic",
     ["2011x"]        = "2011X",
     ["Super Sonic"]  = "Fleetway",
-    ["Lord X"]       = "Sonic",
-    ["EXE"]          = "Sonic",
 }
 
 local CharList = {}
@@ -1083,10 +1083,10 @@ end
 
 local VisualsDefaults = {
     Chams = {
-        Surv_Enabled = false,
-        Surv_Style   = { Outline = true, Fill = true },
-        Surv_OutCol  = Color3.fromRGB(255, 255, 255),
-        Surv_FillCol = Color3.fromRGB(0, 255, 0),
+        Surv_Enabled  = false,
+        Surv_Style    = { Outline = true, Fill = true },
+        Surv_OutCol   = Color3.fromRGB(255, 255, 255),
+        Surv_FillCol  = Color3.fromRGB(0, 255, 0),
         Surv_Limp_Out = 0, Surv_Limp_Fill = 2,
         
         EXE_Enabled  = false,
@@ -1094,6 +1094,19 @@ local VisualsDefaults = {
         EXE_OutCol   = Color3.fromRGB(255, 255, 255),
         EXE_FillCol  = Color3.fromRGB(255, 0, 0),
         EXE_Limp_Out = 0, EXE_Limp_Fill = 2,
+    },
+    Tripwire = {
+        Enabled    = false,
+        CustomID   = "",
+        Speed      = 5,
+        Direction  = "Right",
+        RandMin    = 2,
+        RandMax    = 5,
+        Style      = "Shockwave",
+        Size       = 5,
+        ScaleMode  = "3D",
+        FillCol    = Color3.fromRGB(255, 50, 50),
+        LimpFill   = 2,
     },
     TwoD = {
         Enabled    = false,
@@ -1251,6 +1264,45 @@ SecPad:AddColorpicker("Pad_FillCol",{ Title = "Pad Fill",       Default = Cfg.Pa
 SecPad:AddSlider("Pad_LimpOut",     { Title = "Outline Transp.", Min = 0, Max = 5, Default = Cfg.Pad.Limp_Out, Rounding = 1, Callback = function(v) Cfg.Pad.Limp_Out = v end })
 SecPad:AddSlider("Pad_LimpFill",    { Title = "Fill Transp.",   Min = 0, Max = 5, Default = Cfg.Pad.Limp_Fill, Rounding = 1, Callback = function(v) Cfg.Pad.Limp_Fill = v end })
 
+local SecTrap = TabVisuals:AddSection("Tripwire Mines ESP")
+
+local function WipeTrapCache()
+    for obj, data in pairs(GlobalState.Vis.TrapCache) do
+        if data.Proxy then data.Proxy:Destroy() end
+    end
+    table.clear(GlobalState.Vis.TrapCache)
+end
+
+SecTrap:AddToggle("Trap_Tog", { Title = "Show Tripwire Mines", Default = Cfg.Tripwire.Enabled, Callback = function(v) Cfg.Tripwire.Enabled = v; WipeTrapCache() end })
+
+SecTrap:AddDropdown("Trap_Style", {
+    Title = "Visual Style (Decal)",
+    Values = {"Shockwave", "Circle Dashed 4", "Shift Lock", "Custom"},
+    Default = Cfg.Tripwire.Style,
+    Callback = function(v) Cfg.Tripwire.Style = v; WipeTrapCache() end
+})
+
+SecTrap:AddInput("Trap_CustomID", { Title = "Custom ID (Numbers only)", Default = Cfg.Tripwire.CustomID, Callback = function(v) Cfg.Tripwire.CustomID = v; WipeTrapCache() end })
+
+SecTrap:AddSlider("Trap_Size", { Title = "Size", Min = 0.1, Max = 20, Default = Cfg.Tripwire.Size, Rounding = 1, Callback = function(v) Cfg.Tripwire.Size = v end })
+
+SecTrap:AddDropdown("Trap_ScaleMode", {
+    Title = "Scale Mode",
+    Description = "2D: Static screen size | 3D: Scales with distance",
+    Values = {"2D", "3D"},
+    Default = Cfg.Tripwire.ScaleMode,
+    Callback = function(v) Cfg.Tripwire.ScaleMode = v end
+})
+
+SecTrap:AddParagraph({ Title = "Rotation Settings", Content = "" })
+SecTrap:AddSlider("Trap_Speed", { Title = "Rotation Speed", Min = 0.1, Max = 30, Default = Cfg.Tripwire.Speed, Rounding = 1, Callback = function(v) Cfg.Tripwire.Speed = v end })
+SecTrap:AddDropdown("Trap_Dir", { Title = "Rotation Direction", Values = {"Left", "Right", "Random"}, Default = Cfg.Tripwire.Direction, Callback = function(v) Cfg.Tripwire.Direction = v end })
+SecTrap:AddSlider("Trap_RandMin", { Title = "Random Min Time (s)", Min = 0.1, Max = 10, Default = Cfg.Tripwire.RandMin, Rounding = 1, Callback = function(v) Cfg.Tripwire.RandMin = v end })
+SecTrap:AddSlider("Trap_RandMax", { Title = "Random Max Time (s)", Min = 0.1, Max = 10, Default = Cfg.Tripwire.RandMax, Rounding = 1, Callback = function(v) Cfg.Tripwire.RandMax = v end })
+
+SecTrap:AddParagraph({ Title = "Color & Transparency", Content = "" })
+SecTrap:AddColorpicker("Trap_FillCol", { Title = "Image Color", Default = Cfg.Tripwire.FillCol, Callback = function(v) Cfg.Tripwire.FillCol = v end })
+SecTrap:AddSlider("Trap_LimpFill", { Title = "Image Transp.", Min = 0, Max = 5, Default = Cfg.Tripwire.LimpFill, Rounding = 1, Callback = function(v) Cfg.Tripwire.LimpFill = v end })
 local SecNight = TabVisuals:AddSection("Atmosphere & World")
 SecNight:AddToggle("Night_Tog", {
     Title = "Night Mode", Default = Cfg.Night.Enabled,
@@ -1317,7 +1369,6 @@ local DOD_Assets = {
         ["Amy"]         = "rbxassetid://111226713397041",
         ["Shadow"]      = "rbxassetid://113857022513506",
         ["SuperSonic"]  = "rbxassetid://112771236848699",
-        ["Super Sonic"] = "rbxassetid://112771236848699",
     },
     EXE = {
         ["TailsDoll"]     = "rbxassetid://88717022359465",
@@ -1561,8 +1612,13 @@ local function GetShadowSound()
         s.Name    = "Doomsense_LMS_Shadow"
         s.SoundId = "rbxassetid://0"
         s.Volume  = 0
-        s.Looped  = true
+        s.Looped  = GlobalConfig.LMS.LoopTrack
         s.Parent  = SoundService
+        s.Ended:Connect(function()
+            if not GlobalConfig.LMS.LoopTrack then
+                GlobalState.LMS.TrackFinished = true
+            end
+        end)
     end
     return s
 end
@@ -1598,6 +1654,17 @@ TabLMS:AddSlider("LMS_FXVolumeSlider", {
     Title   = "Start Effect Volume",
     Default = 1, Min = 0, Max = 5, Rounding = 1,
     Callback = function(v) GlobalConfig.LMS.EffectVolume = v end
+})
+
+TabLMS:AddToggle("LMS_LoopTrack", {
+    Title       = "Loop Custom Track",
+    Description = "Repeat when finished. If OFF, it stays silent after ending.",
+    Default     = true,
+    Callback    = function(v) 
+        GlobalConfig.LMS.LoopTrack = v 
+        local shadow = SoundService:FindFirstChild("Doomsense_LMS_Shadow")
+        if shadow then shadow.Looped = v end
+    end
 })
 
 TabLMS:AddDropdown("LMS_StartEffect", {
@@ -2006,29 +2073,6 @@ InterfaceManager:SetFolder("Doomsense")
 SaveManager:SetFolder("Doomsense/cfg")
 InterfaceManager:BuildInterfaceSection(TabSettings)
 SaveManager:BuildConfigSection(TabSettings)
-TabSettings:AddSection("Quick Save")
-TabSettings:AddButton({
-    Title = "Save / Overwrite Config",
-    Description = "Saves the currently selected or typed config",
-    Callback = function()
-        local cfgName = Options.SaveManager_ConfigList.Value
-        if not cfgName or cfgName == "" then
-            cfgName = Options.SaveManager_ConfigName.Value
-        end
-
-        if cfgName and cfgName:gsub(" ", "") ~= "" then
-            local success, err = SaveManager:Save(cfgName)
-            if success then
-                Fluent:Notify({ Title = "Config", Content = "Successfully saved: " .. cfgName, Duration = 3 })
-                SaveManager:RefreshConfigList()
-            else
-                Fluent:Notify({ Title = "Error", Content = "Failed to save: " .. tostring(err), Duration = 3 })
-            end
-        else
-            Fluent:Notify({ Title = "Config", Content = "Please select or type a config name first!", Duration = 3 })
-        end
-    end
-})
 TabSettings:AddButton({
     Title = "REJOIN SERVER",
     Description = "Rejoins the current server",
@@ -2313,6 +2357,51 @@ local function DoVisualsRender()
     end
 end
 
+local function DoTrapRender(dt)
+    if not Cfg.Tripwire.Enabled then return end
+    
+    local now = tick()
+    local spd = Cfg.Tripwire.Speed
+    
+    for obj, data in pairs(GlobalState.Vis.TrapCache) do
+        if obj.Parent and data.Proxy.Parent then
+            
+            if Cfg.Tripwire.Direction == "Random" then
+                if now >= data.NextSwitch then
+                    data.TargetDir = (math.random(1, 2) == 1) and 1 or -1
+                    local rMin = math.clamp(Cfg.Tripwire.RandMin, 0.1, 10)
+                    local rMax = math.max(rMin, Cfg.Tripwire.RandMax)
+                    data.NextSwitch = now + (math.random(rMin * 10, rMax * 10) / 10)
+                end
+            else
+                data.TargetDir = (Cfg.Tripwire.Direction == "Left") and -1 or 1
+            end
+            
+            data.CurrentDir = data.CurrentDir + (data.TargetDir - data.CurrentDir) * (dt * 2)
+            
+            data.Angle = data.Angle + (spd * 20 * data.CurrentDir * dt)
+            
+            data.Proxy.CFrame = CFrame.new(obj.Position)
+
+            if data.ImgObj and data.BgObj then
+                data.ImgObj.Rotation = data.Angle
+                
+                -- Image Color & Transp
+                data.ImgObj.ImageColor3 = Cfg.Tripwire.FillCol
+                data.ImgObj.ImageTransparency = GetTrans(Cfg.Tripwire.LimpFill, true)
+                
+                local s = Cfg.Tripwire.Size
+                if Cfg.Tripwire.ScaleMode == "3D" then
+                    data.BgObj.Size = UDim2.new(s, 0, s, 0)
+                else
+                    local px = s * 20
+                    data.BgObj.Size = UDim2.new(0, px, 0, px)
+                end
+            end
+        end
+    end
+end
+
 -- ── LMS Audio (called at 20 tps accumulator) ────────────────────────────
 local function DoLMSAudio()
     local L = GlobalState.LMS
@@ -2321,9 +2410,17 @@ local function DoLMSAudio()
     local shadow = GetShadowSound()
 
     if currentState == "ING" or currentState == "80s" then
+        if not L.RoundActive then
+            L.RoundActive = true
+            L.InitGraceTimer = tick()
+            L.TrackFinished = false
+            L.VisualPlayed = false
+        end
+
+        if tick() - L.InitGraceTimer < 3 then return end
+
         if L.StopRoutineRunning then L.StopRoutineRunning = false end
 
-        -- Scan players for DOD
         if not L.VisualPlayed then
             local survs, killers = {}, {}
             for _, p in pairs(Players:GetPlayers()) do
@@ -2335,7 +2432,6 @@ local function DoLMSAudio()
             if #survs   > 0 then L.Survivor = survs[1] end
         end
 
-        -- Music sync
         local original = nil
         if folder then
             for _, s in pairs(folder:GetChildren()) do
@@ -2358,16 +2454,20 @@ local function DoLMSAudio()
                 if original.Volume > 0 then original.Volume = 0 end
 
                 if L.CurrentAssetID then
-                    if shadow.SoundId ~= L.CurrentAssetID then
-                        shadow.SoundId      = L.CurrentAssetID
-                        shadow.TimePosition = original.TimePosition
-                        shadow:Play()
+                    if not L.TrackFinished then
+                        if shadow.SoundId ~= L.CurrentAssetID then
+                            shadow.SoundId      = L.CurrentAssetID
+                            shadow.TimePosition = original.TimePosition
+                            shadow:Play()
+                        end
+                        
+                        if not shadow.Playing then shadow:Play() end
+                        
+                        if shadow.PlaybackSpeed ~= original.PlaybackSpeed then shadow.PlaybackSpeed = original.PlaybackSpeed end
+                        shadow.Volume = GlobalConfig.LMS.Volume
+                    else
+                        if shadow.Playing then shadow:Stop() end
                     end
-                    if not shadow.Playing then shadow:Play() end
-                    local diff = math.abs(shadow.TimePosition - original.TimePosition)
-                    if diff > 0.1 then shadow.TimePosition = original.TimePosition end
-                    if shadow.PlaybackSpeed ~= original.PlaybackSpeed then shadow.PlaybackSpeed = original.PlaybackSpeed end
-                    shadow.Volume = GlobalConfig.LMS.Volume
                 end
             else
                 L.IsCapturing  = false
@@ -2380,7 +2480,9 @@ local function DoLMSAudio()
             if shadow.Playing then shadow:Pause() end
         end
     else
+        L.RoundActive = false
         L.VisualPlayed = false
+        L.TrackFinished = false
         if L.IsCapturing then TriggerSteppedStop(shadow) end
     end
 end
@@ -2469,7 +2571,68 @@ local function DoAutoVote()
     end
 end
 
--- ── Pad Scanner (called every 0.5s) ─────────────────────────────────────
+-- ── Pad/Mine Scanner (called every 0.5s) ─────────────────────────────────────
+local TRAP_ASSETS = {
+    ["Shockwave"]       = "rbxassetid://12914395250",["Circle Dashed 4"] = "rbxassetid://10382429808",
+    ["Shift Lock"]      = "rbxassetid://118624373632520",
+}
+
+local function DoTrapScan()
+    local Cache = GlobalState.Vis.TrapCache
+    if not Cfg.Tripwire.Enabled then return end
+    
+    local projFolder = Workspace:FindFirstChild("Projectile")
+    local trapsFolder = projFolder and projFolder:FindFirstChild("Traps")
+    if not trapsFolder then return end
+
+    for _, obj in pairs(trapsFolder:GetChildren()) do
+        if obj.Name == "Union" and obj:GetAttribute("Owner") and not Cache[obj] then
+            local proxy = Instance.new("Part")
+            proxy.Name = "Doom_TrapProxy"
+            proxy.Anchored = true
+            proxy.CanCollide = false
+            proxy.CanQuery = false
+            proxy.Transparency = 1
+            proxy.Size = Vector3.new(0.1, 0.1, 0.1)
+            proxy.CFrame = obj.CFrame
+            proxy.Parent = Visuals_Folder
+            
+            local bg = Instance.new("BillboardGui")
+            bg.AlwaysOnTop = true
+            bg.Parent = proxy
+            
+            local img = Instance.new("ImageLabel")
+            img.BackgroundTransparency = 1
+            img.Size = UDim2.fromScale(1, 1)
+            
+            local targetID = TRAP_ASSETS[Cfg.Tripwire.Style]
+            if Cfg.Tripwire.Style == "Custom" then
+                local numID = string.match(Cfg.Tripwire.CustomID, "%d+")
+                if numID then targetID = "rbxassetid://" .. numID end
+            end
+            
+            img.Image = targetID or ""
+            img.Parent = bg
+
+            Cache[obj] = {
+                Proxy = proxy,
+                BgObj = bg,
+                ImgObj = img,
+                Angle = 0,
+                CurrentDir = (Cfg.Tripwire.Direction == "Left") and -1 or 1,
+                TargetDir = (Cfg.Tripwire.Direction == "Left") and -1 or 1,
+                NextSwitch = tick() + math.random(Cfg.Tripwire.RandMin * 10, Cfg.Tripwire.RandMax * 10)/10
+            }
+        end
+    end
+    
+    for obj, data in pairs(Cache) do
+        if not obj.Parent then
+            if data.Proxy then data.Proxy:Destroy() end
+            Cache[obj] = nil
+        end
+    end
+end
 local function DoPadScan()
     local SV = GlobalState.Vis
 
@@ -2603,6 +2766,9 @@ RunService.Heartbeat:Connect(function(dt)
     -- Silver Recording — every frame
     DoSilverRecord()
 
+    -- Mine — every frame
+    DoTrapRender(dt)
+
     -- NoCDJump — 10 tps (0.1s)
     FastTimers.NoCDJump = FastTimers.NoCDJump + dt
     if FastTimers.NoCDJump >= 0.1 then
@@ -2649,6 +2815,7 @@ task.spawn(function()
         DoART()
         DoAutoVote()
         DoPadScan()
+        DoTrapScan()
         DoViewportCheck()
 
         -- Every ~1s
@@ -2709,7 +2876,7 @@ end)
 Window:SelectTab(1)
 
 Fluent:Notify({
-    Title    = "DOOMSENSE V2.1",
+    Title    = "DOOMSENSE V2.2",
     Content  = "Fluent — Loaded.",
     Duration = 5
 })
@@ -2730,4 +2897,4 @@ CoreGui.ChildRemoved:Connect(function(child)
     end
 end)
 
-print("DOOMSENSE V2.1: Fluent — All Systems Online.")
+print("DOOMSENSE V2.2: Fluent All Systems Online.")
