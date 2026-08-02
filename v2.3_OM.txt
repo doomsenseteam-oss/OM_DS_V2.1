@@ -2394,6 +2394,7 @@ local function DoVisualsRender()
     local gs = GetGameState()
     local isRoundActive = (gs == "ING" or gs == "80s")
 
+    -- Automatic
     if not isRoundActive then
         for m, hl in pairs(GlobalState.Vis.HighlightCache) do
             if hl and hl.Parent then hl:Destroy() end
@@ -2409,6 +2410,7 @@ local function DoVisualsRender()
         return
     end
 
+    -- Cleanup
     for m, hl in pairs(GlobalState.Vis.HighlightCache) do
         if not m or not m.Parent then hl:Destroy(); GlobalState.Vis.HighlightCache[m] = nil end
     end
@@ -2429,7 +2431,24 @@ local function DoVisualsRender()
     for _, p in pairs(Players:GetPlayers()) do
         local char = p.Character
         if char and char:IsDescendantOf(Workspace) and char:FindFirstChild("HumanoidRootPart") then
-            if p == LocalPlayer then
+            local root = char.HumanoidRootPart
+            local charAttr = char:GetAttribute("Character")
+
+            local isLocal = (p == LocalPlayer)
+            local hasActiveCharacter = (charAttr ~= nil and charAttr ~= "" and char.Name ~= "Default")
+
+            if not isLocal and not hasActiveCharacter and IsInLobbyArea(root.Position) then
+                if GlobalState.Vis.HighlightCache[char] then
+                    GlobalState.Vis.HighlightCache[char].Enabled = false
+                end
+                if GlobalState.Vis.TagCache[char] then
+                    GlobalState.Vis.TagCache[char].TopGui.Enabled = false
+                    GlobalState.Vis.TagCache[char].BotGui.Enabled = false
+                end
+                continue
+            end
+
+            if isLocal then
                 local hl = GetHighlight(char)
                 if Cfg.Local.Enabled then
                     hl.Enabled = true; hl.Adornee = char
@@ -2444,7 +2463,6 @@ local function DoVisualsRender()
                 local hl    = GetHighlight(char)
                 local tData = GetTags(char)
                 local head  = char:FindFirstChild("Head") or char.PrimaryPart
-                local root  = char:FindFirstChild("HumanoidRootPart")
 
                 local isEnabled = isExe and Cfg.Chams.EXE_Enabled or (not isExe and Cfg.Chams.Surv_Enabled)
                 if isEnabled then
@@ -2640,7 +2658,59 @@ local function DoLMSAudio()
     end
 end
 
--- ── ART (Auto Ring Teleport) — Retries every 2 seconds ───────────────────────
+local CachedARTPart = nil
+local MapConnection = nil
+
+local function CacheARTObjects(mapModel)
+    if not mapModel then return end
+    
+    local escapes = mapModel:FindFirstChild("Spawns", true) and mapModel.Spawns:FindFirstChild("Escapes")
+    if escapes then
+        local exit = escapes:FindFirstChild("2EscapePart") or escapes:FindFirstChild("1EscapePart") or escapes:FindFirstChild("3EscapePart")
+        if exit then
+            CachedARTPart = exit
+            return
+        end
+    end
+
+    for _, v in pairs(mapModel:GetChildren()) do
+        if v:IsA("MeshPart") and v.MeshId == "rbxassetid://106058960373684" then
+            CachedARTPart = v
+            return
+        elseif v:IsA("BasePart") and (v.Name == "2EscapePart" or v.Name == "1EscapePart" or v.Name == "EscapePart") then
+            CachedARTPart = v
+            return
+        end
+    end
+
+    if MapConnection then MapConnection:Disconnect() end
+    MapConnection = mapModel.ChildAdded:Connect(function(child)
+        if child:IsA("MeshPart") and child.MeshId == "rbxassetid://106058960373684" then
+            CachedARTPart = child
+        end
+    end)
+end
+
+task.spawn(function()
+    local lastState = ""
+    while GlobalState.ScriptActive do
+        task.wait(0.5)
+        local currentState = GetGameState()
+        if (currentState == "MS" or currentState == "ING") and lastState ~= currentState then
+            CachedARTPart = nil
+            local mapsFolder = Workspace:FindFirstChild("Maps") or Workspace:FindFirstChild("Map")
+            if mapsFolder then
+                local activeMap = mapsFolder:GetChildren()[1]
+                if activeMap then
+                    CacheARTObjects(activeMap)
+                end
+            end
+        end
+        lastState = currentState
+    end
+end)
+
+-- ── ART (Auto Ring Teleport) ───────────────────────
 local function DoART()
     local A = GlobalState.ART
     local currentState = GetGameState()
@@ -2652,7 +2722,7 @@ local function DoART()
 
     if not GlobalConfig.AutoRing then return end
 
-    -- Repeat every 2 seconds if enabled
+    -- Повтор вызова каждые 2 секунды, пока функция включена
     if tick() - A.LastTeleport < 2 then return end
 
     if currentState == "ING" or currentState == "80s" then
@@ -2666,25 +2736,28 @@ local function DoART()
             local hum  = char and char:FindFirstChild("Humanoid")
 
             if root and hum and hum.Health > 0 then
-                local targetCF  = nil
-                local foundType = ""
+                -- Берём уже готовый закэшированный объект
+                local targetPart = CachedARTPart
 
-                for _, v in pairs(Workspace:GetDescendants()) do
-                    if v:IsA("MeshPart") and v.MeshId == "rbxassetid://106058960373684" then
-                        targetCF  = v.CFrame + Vector3.new(0, 3, 0)
-                        foundType = "Ring"
-                        break
-                    elseif v:IsA("BasePart") and (v.Name == "2EscapePart" or v.Name == "1EscapePart" or v.Name == "EscapePart") then
-                        targetCF  = v.CFrame + Vector3.new(0, 3, 0)
-                        foundType = "Exit Zone"
+                -- Резервная страховка на случай, если кэш не успел подхватить объект
+                if not targetPart or not targetPart.Parent then
+                    local mapsFolder = Workspace:FindFirstChild("Maps") or Workspace:FindFirstChild("Map")
+                    if mapsFolder then
+                        for _, v in pairs(mapsFolder:GetDescendants()) do
+                            if v:IsA("MeshPart") and v.MeshId == "rbxassetid://106058960373684" then
+                                targetPart = v; break
+                            elseif v:IsA("BasePart") and (v.Name == "2EscapePart" or v.Name == "1EscapePart" or v.Name == "EscapePart") then
+                                targetPart = v; break
+                            end
+                        end
                     end
                 end
 
-                if targetCF then
+                if targetPart and targetPart.Parent then
                     root.Velocity = Vector3.zero
-                    root.CFrame   = targetCF
+                    root.CFrame   = targetPart.CFrame + Vector3.new(0, 3, 0)
                     A.LastTeleport = tick()
-                    Fluent:Notify({ Title = "ART Triggered", Content = "Teleported to: " .. foundType .. " (Retrying every 2s)", Duration = 2 })
+                    Fluent:Notify({ Title = "ART Triggered", Content = "Teleported to: " .. targetPart.Name, Duration = 2 })
                 end
             end
         end
